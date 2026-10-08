@@ -1,0 +1,1687 @@
+{
+  "name": "WF00 - Manager: Ingesta Asíncrona & Triage de Intenciones",
+  "nodes": [
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"status\": \"accepted\",\n  \"message\": \"Solicitud recibida correctamente\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        112,
+        640
+      ],
+      "id": "d8fa7b14-5e57-4c78-ae89-4f3601b7cd49",
+      "name": "02 - ACK 200 OK"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const input = $json;\n\n// IGNORAR mensajes enviados por bots (evita loops)\nif (input.message && input.message.from && input.message.from.is_bot === true) {\n  return {\n    json: {\n      traceId: 'ignored-' + Date.now(),\n      timestamp: new Date().toISOString(),\n      channel: 'ignored',\n      sender: 'ignored',\n      message: '',\n      manager: { workflow: 'WF_MANAGER_ORQUESTADOR', version: '1.0' },\n      _skip: true\n    }\n  };\n}\n\n// Detección de origen\nconst esTelegram = input.message && input.message.chat && input.message.text;\nconst esChatTrigger = input.chatInput;\n// ... el resto igual\n\nlet message, channel, sender;\n\nif (esTelegram) {\n  // Telegram: { message: { text, chat: { id }, from: { ... } } }\n  message = input.message.text;\n  channel = 'telegram';\n  sender = String(input.message.chat.id);\n} else if (esChatTrigger) {\n  // Chat de n8n\n  message = input.chatInput;\n  channel = 'chat';\n  sender = input.sessionId ?? 'chat-user';\n} else {\n  // Webhook genérico\n  const data = input.body ?? input;\n  message = data.message ?? data.text ?? '';\n  channel = data.channel ?? 'unknown';\n  sender = data.sender ?? data.from ?? 'unknown';\n}\n\nmessage = String(message).trim();\n\nconst traceId = `${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;\n\nreturn {\n  json: {\n    traceId,\n    timestamp: new Date().toISOString(),\n\n    channel,\n    sender,\n    message,\n\n    manager: {\n      workflow: 'WF_MANAGER_ORQUESTADOR',\n      version: '1.0'\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        272,
+        304
+      ],
+      "id": "8813b40c-ea64-428f-add9-ede532994b68",
+      "name": "03 - Normalizar + TraceID"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const allowedIntents = [\n  'DISPONIBILIDAD',\n  'RESERVA',\n  'FACTURA_PAGO',\n  'ATENCION_HUESPED'\n];\n\n// Con Output Parser, el resultado viene en $json.output (objeto)\nconst out = $json.output ?? {};\n\nlet intent = String(out.intent ?? '').trim().toUpperCase();\nlet confidence = Number(out.confidence ?? 0);\n\nlet payload = {\n  fecha_inicio: out.payload?.fecha_inicio ?? null,\n  fecha_fin: out.payload?.fecha_fin ?? null\n};\n\n// Validaciones de seguridad\nlet finalIntent = intent;\nlet fallbackApplied = false;\n\nif (!allowedIntents.includes(intent)) {\n  finalIntent = 'ATENCION_HUESPED';\n  fallbackApplied = true;\n}\n\nif (!Number.isFinite(confidence) || confidence < 0.80) {\n  finalIntent = 'ATENCION_HUESPED';\n  fallbackApplied = true;\n}\n\n// Solo DISPONIBILIDAD y RESERVA conservan fechas\nif (finalIntent !== 'DISPONIBILIDAD' && finalIntent !== 'RESERVA') {\n  payload = { fecha_inicio: null, fecha_fin: null };\n}\n\n// Recuperar datos del nodo 03 (traceId, canal, etc.)\nconst base = $('03 - Normalizar + TraceID').first().json;\n\nreturn {\n  json: {\n    traceId: base.traceId,\n    timestamp: base.timestamp,\n    channel: base.channel,\n    sender: base.sender,\n    message: base.message,\n\n    intent: finalIntent,\n    payload,\n\n    triage: {\n      originalIntent: intent,\n      confidence,\n      fallbackApplied\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        928,
+        304
+      ],
+      "id": "12b2693b-7f84-41ed-b437-b0819d88a905",
+      "name": "05 - Validar Triage"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "DISPONIBILIDAD",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "d34111b3-092a-4d71-bb3e-6f54165bce34"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "0c56d2a1-b7fe-4b09-93cc-0870cf5ce328",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "RESERVA",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "82c94381-6c5d-43b0-b220-d6a4855c6ddd",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "FACTURA_PAGO",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "a3c0e8ad-24de-4cdb-b839-72d304fc14a7",
+                    "leftValue": "={{ $json.intent }}",
+                    "rightValue": "ATENCION_HUESPED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        1440,
+        272
+      ],
+      "id": "5aeeac27-97b2-41ce-883e-b9edd256c86d",
+      "name": "06 - Routing por Intención"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "Qor5RIDfVY1CbIK9",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/Qor5RIDfVY1CbIK9",
+          "cachedResultName": "WF_WORKER_DISPONIBILIDAD"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ocupacion": "={{ String($('05b - Extraer Fechas').item.json.payload.fechas.ocupacion) }}",
+            "traceId": "={{ $('03 - Normalizar + TraceID').item.json.traceId }}",
+            "channel": "={{ $('03 - Normalizar + TraceID').item.json.channel }}",
+            "sender": "={{ $('03 - Normalizar + TraceID').item.json.sender }}",
+            "message": "={{ $('03 - Normalizar + TraceID').item.json.message }}",
+            "intent": "={{ $('05 - Validar Triage').item.json.intent }}",
+            "fecha_inicio": "={{ $('05b - Extraer Fechas').item.json.payload.fechas.fecha_inicio }}",
+            "fecha_fin": "={{ $('05b - Extraer Fechas').item.json.payload.fechas.fecha_fin }}",
+            "tipo": "={{ $('05b - Extraer Fechas').item.json.payload.fechas.tipo }}",
+            "categoria": "={{ $('05b - Extraer Fechas').item.json.payload.fechas.categoria }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "traceId",
+              "displayName": "traceId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "channel",
+              "displayName": "channel",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "sender",
+              "displayName": "sender",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "intent",
+              "displayName": "intent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "fecha_inicio",
+              "displayName": "fecha_inicio",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "fecha_fin",
+              "displayName": "fecha_fin",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "tipo",
+              "displayName": "tipo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "categoria",
+              "displayName": "categoria",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "ocupacion",
+              "displayName": "ocupacion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1664,
+        32
+      ],
+      "id": "ae47b761-e8d7-40cb-9428-e34e231136e4",
+      "name": "07 - Worker Disponibilidad"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "hcstktcldLtkVAvd",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/hcstktcldLtkVAvd",
+          "cachedResultName": "WF_WORKER_RESERVA"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "traceId": "={{ $('03 - Normalizar + TraceID').item.json.traceId }}",
+            "channel": "={{ $('03 - Normalizar + TraceID').item.json.channel }}",
+            "sender": "={{ $('03 - Normalizar + TraceID').item.json.sender }}",
+            "message": "={{ $('03 - Normalizar + TraceID').item.json.message }}",
+            "intent": "={{ $('05 - Validar Triage').item.json.intent }}",
+            "fecha_inicio": "={{ $('05b - Extraer Fechas').item.json.payload.fechas.fecha_inicio }}",
+            "fecha_fin": "={{ $('05b - Extraer Fechas').item.json.payload.fechas.fecha_fin }}",
+            "tipo": "={{ $('05b - Extraer Fechas').item.json.payload.fechas.tipo }}",
+            "categoria": "={{ $('05b - Extraer Fechas').item.json.payload.fechas.categoria }}",
+            "ocupacion": "={{ String($('05b - Extraer Fechas').item.json.payload.fechas.ocupacion) }}",
+            "pasajero": "={{ $('05b - Extraer Fechas').item.json.payload.fechas.pasajero }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "traceId",
+              "displayName": "traceId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "channel",
+              "displayName": "channel",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "sender",
+              "displayName": "sender",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "intent",
+              "displayName": "intent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "fecha_inicio",
+              "displayName": "fecha_inicio",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "fecha_fin",
+              "displayName": "fecha_fin",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "tipo",
+              "displayName": "tipo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "categoria",
+              "displayName": "categoria",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "ocupacion",
+              "displayName": "ocupacion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "pasajero",
+              "displayName": "pasajero",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1664,
+        208
+      ],
+      "id": "3f3a8616-b82b-4277-8bbf-9886335d36fd",
+      "name": "08 - Worker Reserva"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "7PgR4TBA0eDsQjTJ",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/7PgR4TBA0eDsQjTJ",
+          "cachedResultName": "WF_WORKER_FACTURACION"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "traceId": "={{ $('03 - Normalizar + TraceID').item.json.traceId }}",
+            "channel": "={{ $('03 - Normalizar + TraceID').item.json.channel }}",
+            "sender": "={{ $('03 - Normalizar + TraceID').item.json.sender }}",
+            "message": "={{ $('03 - Normalizar + TraceID').item.json.message }}",
+            "intent": "={{ $('05 - Validar Triage').item.json.intent }}",
+            "fecha_inicio": "={{ $('05b - Extraer Fechas').item.json.payload.fechas.fecha_inicio }}",
+            "fecha_fin": "={{ $('05b - Extraer Fechas').item.json.payload.fechas.fecha_fin }}",
+            "tipo": "={{ $('05b - Extraer Fechas').item.json.payload.fechas.tipo }}",
+            "categoria": "={{ $('05b - Extraer Fechas').item.json.payload.fechas.categoria }}",
+            "ocupacion": "={{ String($('05b - Extraer Fechas').item.json.payload.fechas.ocupacion) }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "traceId",
+              "displayName": "traceId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "channel",
+              "displayName": "channel",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sender",
+              "displayName": "sender",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "intent",
+              "displayName": "intent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "fecha_inicio",
+              "displayName": "fecha_inicio",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "fecha_fin",
+              "displayName": "fecha_fin",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "tipo",
+              "displayName": "tipo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "categoria",
+              "displayName": "categoria",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "ocupacion",
+              "displayName": "ocupacion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1664,
+        432
+      ],
+      "id": "28444585-5414-44ff-90c8-a1660f21ad97",
+      "name": "09 - Worker Facturación"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "kIHq1pA84y1ZHAlc",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/kIHq1pA84y1ZHAlc",
+          "cachedResultName": "WF_WORKER_ATENCION"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "traceId": "={{ $('03 - Normalizar + TraceID').item.json.traceId }}",
+            "channel": "={{ $('03 - Normalizar + TraceID').item.json.channel }}",
+            "sender": "={{ $('03 - Normalizar + TraceID').item.json.sender }}",
+            "message": "={{ $('03 - Normalizar + TraceID').item.json.message }}",
+            "intent": "={{ $('05 - Validar Triage').item.json.intent }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "traceId",
+              "displayName": "traceId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "channel",
+              "displayName": "channel",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "sender",
+              "displayName": "sender",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "intent",
+              "displayName": "intent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1664,
+        640
+      ],
+      "id": "dff17d38-9181-4618-8d67-d508340a4ed2",
+      "name": "10 - Worker Atención"
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"intent\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"DISPONIBILIDAD\",\n        \"RESERVA\",\n        \"FACTURA_PAGO\",\n        \"ATENCION_HUESPED\"\n      ]\n    },\n    \"confidence\": {\n      \"type\": \"number\",\n      \"minimum\": 0,\n      \"maximum\": 1\n    }\n  },\n  \"required\": [\"intent\", \"confidence\"]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        816,
+        464
+      ],
+      "id": "3bd175ec-3229-4d15-8277-bf175442ebc5",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "hasOutputParser": true,
+        "needsFallback": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "Eres un clasificador de mensajes de huéspedes de un hotel.\n\nIntenciones válidas:\n- DISPONIBILIDAD: consulta si hay habitaciones libres o precios para fechas.\n- RESERVA: quiere reservar o modificar/cancelar una reserva.\n- FACTURA_PAGO: facturas, pagos, comprobantes, cobros.\n- ATENCION_HUESPED: cualquier otra consulta, queja o pedido, o si no puedes determinar la intención con seguridad.\n\nReglas:\n- \"intent\" debe ser exactamente uno de los valores válidos.\n- \"confidence\" es un número entre 0 y 1 que indica tu seguridad.\n\nResponde únicamente con el JSON definido por el formato de salida, sin texto adicional."
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        576,
+        304
+      ],
+      "id": "0638170f-2790-44ca-aed6-f58fbce8a41b",
+      "name": "04 - Triage IA",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-4o-mini",
+        "options": {
+          "temperature": "={{ 0.2 }}",
+          "timeout": 5000,
+          "maxRetries": 3
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        592,
+        464
+      ],
+      "id": "1359a177-f127-4637-ab0c-dbe0792cb842",
+      "name": "OpenRouter Chat Model",
+      "credentials": {
+        "openRouterApi": {
+          "id": "XszMsDI8Ipu9jc7D",
+          "name": "OpenRouter account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -96,
+        640
+      ],
+      "id": "bf662937-1d98-44ad-904c-6f2e5b408833",
+      "name": "When chat message received",
+      "webhookId": "7d5a9639-b745-44e7-b251-4b94ea52256b"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// 05b - Extraer Fechas + Categoria + Ocupacion + Pasajero (Manager)\n\nconst validado = $json;\nconst originalMessage = String(validado.message ?? '');  // sin tocar (para nombre)\nconst message = originalMessage\n  .toLowerCase()\n  .normalize('NFD')\n  .replace(/[\\u0300-\\u036f]/g, ''); // quita tildes\nconst timestamp = validado.timestamp;\n\n// ---------- Utilidades ----------\nconst TZ_OFFSET_MS = 3 * 60 * 60 * 1000; // UTC-3\nconst MS_DAY = 24 * 60 * 60 * 1000;\nconst pad = (n) => String(n).padStart(2, '0');\nconst toISO = (y, m, d) => `${y}-${pad(m)}-${pad(d)}`;\n\nconst hoyISO = () => {\n  const d = new Date(new Date(timestamp).getTime() - TZ_OFFSET_MS);\n  return d.toISOString().slice(0, 10);\n};\n\nconst addDays = (iso, n) => {\n  const d = new Date(iso + 'T00:00:00Z');\n  d.setUTCDate(d.getUTCDate() + n);\n  return d.toISOString().slice(0, 10);\n};\n\nconst diffDays = (a, b) =>\n  Math.round(\n    (new Date(b + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / MS_DAY\n  );\n\nconst DIAS = {\n  domingo: 0, lunes: 1, martes: 2, miercoles: 3,\n  jueves: 4, viernes: 5, sabado: 6\n};\n\nconst MESES = {\n  enero: 1, febrero: 2, marzo: 3, abril: 4, mayo: 5, junio: 6,\n  julio: 7, agosto: 8, septiembre: 9, setiembre: 9, octubre: 10,\n  noviembre: 11, diciembre: 12\n};\n\nconst ANIO_ACTUAL = parseInt(hoyISO().slice(0, 4), 10);\n\n// ---------- Parsers de fecha ----------\nconst parseISO = (s) => {\n  const m = s.match(/(\\d{4})-(\\d{1,2})-(\\d{1,2})/);\n  return m ? toISO(m[1], m[2], m[3]) : null;\n};\n\nconst parseSlash = (s) => {\n  const m = s.match(/(\\d{1,2})\\/(\\d{1,2})(?:\\/(\\d{2,4}))?/);\n  if (!m) return null;\n  let yy = m[3] ?? String(ANIO_ACTUAL);\n  if (yy.length === 2) yy = '20' + yy;\n  return toISO(yy, m[2], m[1]);\n};\n\nconst parseMesNombre = (s) => {\n  const m1 = s.match(/(\\d{1,2})\\s+de\\s+([a-z]+)/);\n  if (m1 && MESES[m1[2]]) return toISO(ANIO_ACTUAL, MESES[m1[2]], m1[1]);\n  const m2 = s.match(/([a-z]+)\\s+(\\d{1,2})/);\n  if (m2 && MESES[m2[1]]) return toISO(ANIO_ACTUAL, MESES[m2[1]], m2[2]);\n  return null;\n};\n\nconst parseDiaSemana = (s) => {\n  for (const [nombre, dow] of Object.entries(DIAS)) {\n    if (new RegExp(`\\\\b${nombre}\\\\b`).test(s)) {\n      const hoy = hoyISO();\n      const hoyDow = new Date(hoy + 'T00:00:00Z').getUTCDay();\n      const delta = (dow - hoyDow + 7) % 7;\n      return addDays(hoy, delta);\n    }\n  }\n  return null;\n};\n\nconst parseRelativa = (s) => {\n  if (/\\bpasado\\s+manana\\b/.test(s)) return addDays(hoyISO(), 2);\n  if (/\\bmanana\\b/.test(s)) return addDays(hoyISO(), 1);\n  if (/\\bhoy\\b/.test(s)) return hoyISO();\n  return null;\n};\n\nconst parseFechaSimple = (s) =>\n  parseISO(s) ??\n  parseSlash(s) ??\n  parseMesNombre(s) ??\n  parseDiaSemana(s) ??\n  parseRelativa(s);\n\n// ---------- Parser de rangos ----------\nconst parseRango = (s) => {\n  // PRIORIDAD 1: \"del 15 al 17 de octubre\" (mes compartido)\n  const mesCompartido = s.match(\n    /(?:del|desde\\s+el|entre\\s+el)\\s+(\\d{1,2})\\s+(?:al|hasta\\s+el|y\\s+el?)\\s+(\\d{1,2})\\s+de\\s+([a-z]+)/\n  );\n  if (mesCompartido) {\n    const mes = MESES[mesCompartido[3]];\n    if (mes) {\n      const f1 = toISO(ANIO_ACTUAL, mes, mesCompartido[1]);\n      const f2 = toISO(ANIO_ACTUAL, mes, mesCompartido[2]);\n      if (f1 && f2 && f2 > f1) {\n        return { inicio: f1, fin: f2 };\n      }\n    }\n  }\n\n  // PRIORIDAD 2: patrones generales\n  const patrones = [\n    /del\\s+(.+?)\\s+al\\s+(.+?)(?:\\s*$|,|\\.)/,\n    /desde\\s+(?:el\\s+)?(.+?)\\s+hasta\\s+(?:el\\s+)?(.+?)(?:\\s*$|,|\\.)/,\n    /entre\\s+(?:el\\s+)?(.+?)\\s+y\\s+(?:el\\s+)?(.+?)(?:\\s*$|,|\\.)/,\n    /(\\d{1,2}\\/\\d{1,2}(?:\\/\\d{2,4})?)\\s+al\\s+(\\d{1,2}\\/\\d{1,2}(?:\\/\\d{2,4})?)/\n  ];\n\n  for (const p of patrones) {\n    const m = s.match(p);\n    if (m) {\n      const f1 = parseFechaSimple(m[1]);\n      const f2 = parseFechaSimple(m[2]);\n      if (f1 && f2 && f2 > f1) {\n        return { inicio: f1, fin: f2 };\n      }\n    }\n  }\n  return null;\n};\n\n// ---------- Duracion ----------\nconst parseDuracion = (s) => {\n  const m = s.match(\n    /por\\s+(\\d+|una|dos|tres|cuatro|cinco|seis|siete)\\s+noches?/\n  );\n  if (!m) return null;\n  const mapa = { una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7 };\n  return mapa[m[1]] ?? parseInt(m[1], 10);\n};\n\n// ---------- Categoria ----------\nconst parseCategoria = (s) => {\n  if (/\\b(standard|std|estandar)\\b/.test(s)) return 'STANDARD';\n  if (/\\b(superior|sup)\\b/.test(s)) return 'SUPERIOR';\n  if (/\\b(premium|pre)\\b/.test(s)) return 'PREMIUM';\n  return null;\n};\n\n// ---------- Ocupacion ----------\nconst parseOcupacion = (s) => {\n  let m = s.match(/(?:para|somos|seremos|vamos)\\s+(\\d{1,2})/);\n  if (m) return parseInt(m[1], 10);\n\n  m = s.match(/\\b(una|dos|tres|cuatro|cinco|seis)\\s+(?:persona|huesped)/);\n  if (m) {\n    const mapa = { una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6 };\n    return mapa[m[1]] ?? null;\n  }\n\n  if (/\\b(pareja|matrimonio)\\b/.test(s)) return 2;\n  if (/\\b(solo yo|solo yo|para mi)\\b/.test(s)) return 1;\n  if (/\\b(familia|en familia)\\b/.test(s)) return 4;\n\n  return null;\n};\n\n// ---------- Pasajero ----------\n// Recibe el mensaje ORIGINAL (con mayusculas y tildes)\nconst parsePasajero = (s) => {\n  // \"a nombre de Juan Perez\"\n  let m = s.match(/a\\s+nombre\\s+de\\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){0,3})/);\n  if (m) return m[1].trim();\n\n  // \"soy Juan Perez\" / \"me llamo Juan Perez\"\n  m = s.match(/(?:soy|me\\s+llamo)\\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){0,3})/);\n  if (m) return m[1].trim();\n\n  // \"mi nombre es Juan Perez\"\n  m = s.match(/mi\\s+nombre\\s+es\\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){0,3})/);\n  if (m) return m[1].trim();\n\n  return null;\n};\n\n// ---------- Logica principal ----------\nconst out = {\n  tipo: 'sin_fechas',\n  fecha_inicio: null,\n  fecha_fin: null,\n  cantidad_noches: 0,\n  categoria: parseCategoria(message),\n  ocupacion: parseOcupacion(message) ?? 1,\n  pasajero: parsePasajero(originalMessage)\n};\n\nconst rango = parseRango(message);\nconst fechaSimple = parseFechaSimple(message);\nconst noches = parseDuracion(message);\n\nif (rango) {\n  out.tipo = 'rango';\n  out.fecha_inicio = rango.inicio;\n  out.fecha_fin = rango.fin;\n  out.cantidad_noches = diffDays(rango.inicio, rango.fin);\n} else if (fechaSimple) {\n  const n = noches ?? 1;\n  out.tipo = n > 1 ? 'desde_cantidad' : 'una_noche';\n  out.fecha_inicio = fechaSimple;\n  out.fecha_fin = n > 1 ? addDays(fechaSimple, n) : fechaSimple;\n  out.cantidad_noches = n;\n} else if (\n  /\\b(mes|semana|finde|fin de semana|verano|invierno|otono|primavera|octubre|noviembre|diciembre|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre)\\b/.test(message)\n) {\n  out.tipo = 'ambigua';\n}\n\nreturn {\n  json: {\n    ...validado,\n    payload: { fechas: out }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1152,
+        304
+      ],
+      "id": "a3ecbb9c-5848-4f60-b69d-56a838283c06",
+      "name": "05b - Extraer Fechas"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $json;\n\nconst approved = input.approved === true;\n\n// Aceptar \"response\" (Disponibilidad) o \"message\" (Reserva)\nconst responseText = input.response ?? input.message ?? '';\nconst hasResponse = typeof responseText === 'string' && responseText.trim().length > 0;\n\nconst hasJudge = input.judge && typeof input.judge === 'object';\n\nconst valid = approved && hasResponse && hasJudge;\n\nreturn [\n  {\n    json: {\n      ...input,\n\n      // Normalizar: siempre exponer \"response\"\n      response: responseText || null,\n\n      workerValidation: {\n        valid,\n        approved,\n        hasResponse,\n        hasJudge\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2032,
+        304
+      ],
+      "id": "e5f09f1f-f30b-4af6-9a55-9b17c4fbfebd",
+      "name": "11 - Validar Resultado Worker"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "024100ce-dae3-46d9-88a2-e25cbc6eaa76",
+              "leftValue": "={{ $json.workerValidation.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2256,
+        304
+      ],
+      "id": "408ddaa0-3386-43d5-b7ca-6f6ec39f67f0",
+      "name": "12 - Resultado Worker válido?"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const input = $json;\n\n// El Worker envía:\n//   input.message  → mensaje original del huésped\n//   input.response → respuesta generada por el Worker\n//\n// Prioridades:\n//   - originalMessage: input.originalMessage (de Reserva/Facturación) o input.message\n//   - message:         input.response (respuesta) o input.message (fallback)\n\nconst originalMsg = input.originalMessage ?? input.message ?? null;\nconst responseMsg = input.response ?? input.message ?? null;\n\nreturn {\n  json: {\n    traceId: input.traceId ?? null,\n    timestamp: new Date().toISOString(),\n\n    channel: input.channel,\n    recipient: input.recipient ?? input.sender ?? null,\n\n    originalMessage: originalMsg,\n    message: responseMsg,\n\n    approved: input.approved,\n\n    esReclamoCobro: input.esReclamoCobro || false,\n    esQueja: input.esQueja || false,\n    reservaRegistrada: input.reservaRegistrada || null,\n\n    worker: input.worker || null,\n    judge: input.judge ?? null,\n\n    dispatch: {\n      ready: true,\n      source: input.worker?.workflow ?? 'UNKNOWN'\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2528,
+        224
+      ],
+      "id": "ed34e52e-840d-4399-9689-787df919d066",
+      "name": "13 - Preparar Dispatch"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $json;\n\n// Priorizar el motivo del escalation si existe\nlet motivo = 'El resultado del Worker no cumple con el contrato esperado.';\n\n// Si el Worker mandó escalación con motivo, usarlo\nif (input.escalation && input.escalation.reason) {\n  motivo = input.escalation.reason;\n}\n// Si hay judge con reason, usarlo como fallback\nelse if (input.judge && input.judge.reason) {\n  motivo = input.judge.reason;\n}\n\nreturn {\n  json: {\n    status: 'RECHAZADO',\n    approved: false,\n    response: null,\n\n    traceId: input.traceId ?? null,\n    timestamp: new Date().toISOString(),\n\n    error: {\n      code: 'INVALID_WORKER_RESULT',\n      message: 'El Manager recibió un resultado incompleto o no aprobado por el Worker.'\n    },\n\n    workerValidation: input.workerValidation ?? null,\n\n    escalation: {\n      required: true,\n      reason: motivo\n    },\n\n    manager: {\n      workflow: 'WF_MANAGER_ORQUESTADOR',\n      stage: 'VALIDACION_RESULTADO_WORKER'\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2544,
+        736
+      ],
+      "id": "35e7743a-5c3d-4bf2-adf2-c747239d88c0",
+      "name": "13-FALSE - Error Resultado Worker"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.worker?.workflow === \"WF_WORKER_RESERVA\" }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    },
+                    "id": "5b8f1975-a15c-4060-93d7-c5b7fb934834"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Reserva"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "f8486724-146a-4724-8ebe-d01e17d6e6a9",
+                    "leftValue": "={{ $json.worker?.workflow === \"WF_WORKER_FACTURACION\" && $json.esReclamoCobro === true }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "ReclamoCobro"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "1ba04510-cbf9-4cde-8410-f003c358248c",
+                    "leftValue": "={{ $json.worker?.workflow === \"WF_WORKER_ATENCION\" && $json.esQueja === true }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Queja"
+            }
+          ]
+        },
+        "looseTypeValidation": true,
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        2880,
+        192
+      ],
+      "id": "55ea0e55-4c6a-43ae-9ba1-8521d2342107",
+      "name": "14 - ¿Notificar?"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3008,
+        1072
+      ],
+      "id": "26e74182-8795-4a4d-9cbd-337e17b7289c",
+      "name": "No Operation, do nothing"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0C7FNNPTL0",
+          "mode": "list",
+          "cachedResultName": "reservas"
+        },
+        "text": "=🏨 Nueva reserva pendiente\nReserva: {{ $json.reservaRegistrada?.reserva_id ?? 'N/D' }}\nHabitación: {{ $json.reservaRegistrada?.habitacion_id ?? 'N/D' }}\nEstado: {{ $json.reservaRegistrada?.estado ?? 'N/D' }}\nContacto: {{ $json.recipient }}\nTrace: {{ $json.traceId }}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.5,
+      "position": [
+        3408,
+        144
+      ],
+      "id": "5d97e00c-03c4-446a-8329-ebf32db3482e",
+      "name": "14A - Slack Reserva",
+      "webhookId": "995945c8-f3ca-47e3-b606-da2c8f4f2d13",
+      "retryOnFail": true,
+      "waitBetweenTries": 2500,
+      "credentials": {
+        "slackApi": {
+          "id": "E0s0144MyIKNFqKm",
+          "name": "Slack account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0C660UE679",
+          "mode": "list",
+          "cachedResultName": "recepcion"
+        },
+        "text": "=⚠️ Queja o pedido especial\nMensaje: {{ $json.originalMessage }}\nContacto: {{ $json.recipient }}\nTrace: {{ $json.traceId }}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.5,
+      "position": [
+        3408,
+        464
+      ],
+      "id": "4cde22a3-0dfb-43b6-9a5a-2c0756742449",
+      "name": "14C - Slack Recepción",
+      "webhookId": "6a4103d6-c0ae-4cdb-a416-c1317cb30ac7",
+      "retryOnFail": true,
+      "waitBetweenTries": 2500,
+      "credentials": {
+        "slackApi": {
+          "id": "E0s0144MyIKNFqKm",
+          "name": "Slack account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0C6G2Z7ZK7",
+          "mode": "list",
+          "cachedResultName": "cobranzas"
+        },
+        "text": "=💰 Reclamo de cobro\nMensaje: {{ $json.originalMessage }}\nContacto: {{ $json.recipient }}\nTrace: {{ $json.traceId }}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.5,
+      "position": [
+        3408,
+        304
+      ],
+      "id": "a49988de-973e-49e9-9cd3-dc4f52d3a852",
+      "name": "14B - Slack Cobranzas",
+      "webhookId": "55173c0c-aa54-4175-ba05-0c730f348bbb",
+      "retryOnFail": true,
+      "waitBetweenTries": 2500,
+      "credentials": {
+        "slackApi": {
+          "id": "E0s0144MyIKNFqKm",
+          "name": "Slack account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0C6G1UQARK",
+          "mode": "list",
+          "cachedResultName": "alertas"
+        },
+        "text": "=🚨 CASO BLOQUEADO — requiere atención\n<!here>\n\nMotivo: {{ $json.escalation?.reason ?? 'N/D' }}\nCódigo: {{ $json.error?.code ?? 'N/D' }}\nTrace: {{ $json.traceId }}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.5,
+      "position": [
+        3392,
+        736
+      ],
+      "id": "bdcb0695-05a2-41a6-8a89-6c494b488ab9",
+      "name": "14-FALSE - Slack Alerta Bloqueo",
+      "webhookId": "03d9f9ff-6ac7-462c-8555-5da77bf020f0",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2500,
+      "credentials": {
+        "slackApi": {
+          "id": "E0s0144MyIKNFqKm",
+          "name": "Slack account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "nvidia/nemotron-3-ultra-550b-a55b",
+        "options": {
+          "temperature": "={{ 0.2 }}",
+          "timeout": 5000,
+          "maxRetries": 3
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatNvidia",
+      "typeVersion": 1,
+      "position": [
+        704,
+        464
+      ],
+      "id": "3d1072f7-1c65-4ca8-8570-0514e02886a6",
+      "name": "NVIDIA Nemotron Chat Model",
+      "credentials": {
+        "nvidiaApi": {
+          "id": "j2gW89oiikvVfhgA",
+          "name": "NVIDIA Nemotron account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "# WF_MANAGER_ORQUESTADOR\n\nPunto de entrada único del sistema. Recibe mensajes de Telegram\ny Chat, clasifica por intención y deriva al Worker especializado.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🔀 FLUJO PRINCIPAL\nTelegram Trigger → Filtrar bots → Normalizar + TraceID\n→ Triage IA → Validar Triage → Extraer Fechas\n→ Routing → Worker → Validar Resultado → Dispatch\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🧠 TRIAGE IA\nClasifica en 4 intenciones: DISPONIBILIDAD, RESERVA,\nFACTURA_PAGO, ATENCION_HUESPED.\nFallback: confidence < 0.80 → ATENCION_HUESPED.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n⚡ EXTRACCIÓN DETERMINÍSTICA\n05b - Extraer Fechas: parsea fechas, rangos, duración,\ncategoría y ocupación sin LLM. Reduce latencia y elimina\nalucinaciones en datos estructurados.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🛡️ VALIDACIÓN COMPARTIDA\n11 - Validar Resultado Worker (DRY): único punto de\nvalidación para los 4 Workers. Verifica approved +\nresponse no vacío + judge presente.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n📢 DISPATCH Y NOTIFICACIONES\n13 - Preparar Dispatch: source dinámico por Worker.\nSwitch 14 evalúa evento y notifica a Slack:\n  • Reserva → #reservas\n  • Reclamo cobro → #cobranzas\n  • Queja → #recepcion\n  • Bloqueo → #alertas (con @here)\n15A - Enviar por Telegram: respuesta al huésped.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🛡️ FILTRO ANTI-LOOP\n01b - Filtrar bots: ignora mensajes con is_bot=true.\nEvita loop infinito cuando el bot responde.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n⚙️ RESILIENCIA\nFallback LLM: Groq gpt-oss-120b → NVIDIA Nemotron.\nRetry On Fail en todos los nodos críticos.",
+        "height": 928,
+        "width": 880,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -32,
+        -1264
+      ],
+      "typeVersion": 1,
+      "id": "ef056695-cca8-4aa4-a429-4f65de905193",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "f273bc23-6870-4754-99c3-2ccaeb3f2057",
+              "leftValue": "={{ $json.channel }}",
+              "rightValue": "telegram",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2880,
+        -128
+      ],
+      "id": "fd0e86af-375c-4e2a-b3f9-7be7a503c3bd",
+      "name": "14T - ¿Responder a Telegram?"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.recipient }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3072,
+        -384
+      ],
+      "id": "f97318ba-48e0-447b-be6b-506cf7a21417",
+      "name": "15A - Enviar por Telegram",
+      "webhookId": "63186b5c-f6f8-4d20-a105-52b17b255da8",
+      "retryOnFail": true,
+      "waitBetweenTries": 2500,
+      "credentials": {
+        "telegramApi": {
+          "id": "KR1RFJYXcqwabjJl",
+          "name": "Hotel Playa bot"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3408,
+        -208
+      ],
+      "id": "cf9dcb40-f9a0-443d-bfc5-fd14cf446906",
+      "name": "No Operation, do nothing1"
+    },
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ]
+      },
+      "type": "@mentoster/n8n-nodes-telegram-polling.telegramPollingTrigger",
+      "typeVersion": 1,
+      "position": [
+        -112,
+        304
+      ],
+      "id": "2adcf6ef-bd2f-4abc-95e3-f32863831a12",
+      "name": "01 - Telegram Trigger",
+      "credentials": {
+        "telegramApi": {
+          "id": "KR1RFJYXcqwabjJl",
+          "name": "Hotel Playa bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "035c9ff8-3b59-479f-a38e-24a6c7f7476d",
+              "leftValue": "={{ $json.message?.from?.is_bot === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        80,
+        400
+      ],
+      "id": "2e1e817a-fc68-414d-8b2d-2e47476262d6",
+      "name": "01b - Filtrar bots"
+    },
+    {
+      "parameters": {
+        "content": "🔵 01. INGESTA Y NORMALIZACIÓN\n• Recibe mensajes de Telegram y Chat.\n• Filtra mensajes del bot (anti-loop).\n• Genera traceId y normaliza el payload.",
+        "height": 608,
+        "width": 704,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -272,
+        208
+      ],
+      "typeVersion": 1,
+      "id": "69a3f39c-4d60-4426-be99-ca20f2908168",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "🟣 02. RAZONAMIENTO E IA\n• Triage clasifica en 4 intenciones (LLM).\n• Extracción de fechas determinística (sin LLM).\n• Fallback LLM: Groq → NVIDIA Nemotron.",
+        "height": 608,
+        "width": 736,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        560,
+        208
+      ],
+      "typeVersion": 1,
+      "id": "c6f8f67d-8726-43d2-b80d-44356d769fed",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "🔵 03. ROUTING Y WORKERS\n• Switch deriva al Worker según intent.\n• 4 Workers especializados en sub-workflows.",
+        "height": 896,
+        "width": 496,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1392,
+        -80
+      ],
+      "typeVersion": 1,
+      "id": "2213409c-b5e2-4ea6-a03c-cba12b83b920",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "content": "🟢 04. VALIDACIÓN Y SALIDA\n• Validación compartida (DRY) de los 4 Workers.\n• Dispatch con source dinámico por Worker.\n• Respuesta al huésped por Telegram.",
+        "height": 1056,
+        "width": 1216,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1984,
+        -432
+      ],
+      "typeVersion": 1,
+      "id": "340bf56b-3e13-4fca-9b5e-035099c84423",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "content": "🔴 05. CIRCUITO DE BLOQUEO\n• Si el Worker no aprobó, se corta el envío.\n• Alerta a #alertas con @here y motivo real.",
+        "height": 240,
+        "width": 1632,
+        "color": "#A30F0F"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1984,
+        672
+      ],
+      "typeVersion": 1,
+      "id": "5355a43f-71e5-4f20-8a52-142c149da5a8",
+      "name": "Sticky Note5"
+    },
+    {
+      "parameters": {
+        "content": "🟢 06. NOTIFICACIONES SLACK\n• Reserva → #reservas\n• Reclamo de cobro → #cobranzas\n• Queja → #recepcion",
+        "height": 656,
+        "width": 304,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        3296,
+        -32
+      ],
+      "typeVersion": 1,
+      "id": "02962013-449c-455a-b0dc-857bb8fafd55",
+      "name": "Sticky Note6"
+    },
+    {
+      "parameters": {
+        "content": "## Paleta de colores por tipo de bloque\nColor\t-\tUso\n🔵 Azul\t-\tIngesta y normalización\n🟣 Violeta  -\tRazonamiento / IA\n🟠 Naranja  -\tGuardrails / Judge\n🟢 Verde  -\tPersistencia y salida\n🔴 Rojo\t -\tBloqueo / Alertas\n",
+        "height": 208,
+        "width": 432,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        896,
+        -1248
+      ],
+      "typeVersion": 1,
+      "id": "db63207c-dde4-4b85-9e72-0876a4e4cfe8",
+      "name": "Sticky Note7"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        448,
+        848
+      ],
+      "id": "88dbf7b0-f1eb-450d-9fc3-2bb915b5f92d",
+      "name": "No Operation, do nothing2"
+    },
+    {
+      "parameters": {
+        "content": " Test Harness para pruebas unitarias y de integración",
+        "height": 208,
+        "width": 400,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -144,
+        592
+      ],
+      "typeVersion": 1,
+      "id": "63612837-827f-45e2-84b0-0046162172c3",
+      "name": "Sticky Note8"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "02 - ACK 200 OK": {
+      "main": [
+        [
+          {
+            "node": "03 - Normalizar + TraceID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03 - Normalizar + TraceID": {
+      "main": [
+        [
+          {
+            "node": "04 - Triage IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "05 - Validar Triage": {
+      "main": [
+        [
+          {
+            "node": "05b - Extraer Fechas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "06 - Routing por Intención": {
+      "main": [
+        [
+          {
+            "node": "07 - Worker Disponibilidad",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "08 - Worker Reserva",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "09 - Worker Facturación",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "10 - Worker Atención",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "04 - Triage IA",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04 - Triage IA": {
+      "main": [
+        [
+          {
+            "node": "05 - Validar Triage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "07 - Worker Disponibilidad": {
+      "main": [
+        [
+          {
+            "node": "11 - Validar Resultado Worker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "04 - Triage IA",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "02 - ACK 200 OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "05b - Extraer Fechas": {
+      "main": [
+        [
+          {
+            "node": "06 - Routing por Intención",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "08 - Worker Reserva": {
+      "main": [
+        [
+          {
+            "node": "11 - Validar Resultado Worker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "09 - Worker Facturación": {
+      "main": [
+        [
+          {
+            "node": "11 - Validar Resultado Worker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "10 - Worker Atención": {
+      "main": [
+        [
+          {
+            "node": "11 - Validar Resultado Worker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11 - Validar Resultado Worker": {
+      "main": [
+        [
+          {
+            "node": "12 - Resultado Worker válido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "12 - Resultado Worker válido?": {
+      "main": [
+        [
+          {
+            "node": "13 - Preparar Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "13-FALSE - Error Resultado Worker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "13 - Preparar Dispatch": {
+      "main": [
+        [
+          {
+            "node": "14 - ¿Notificar?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "14T - ¿Responder a Telegram?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "14 - ¿Notificar?": {
+      "main": [
+        [
+          {
+            "node": "14A - Slack Reserva",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "14B - Slack Cobranzas",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "14C - Slack Recepción",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Operation, do nothing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "13-FALSE - Error Resultado Worker": {
+      "main": [
+        [
+          {
+            "node": "14-FALSE - Slack Alerta Bloqueo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NVIDIA Nemotron Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "04 - Triage IA",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "14T - ¿Responder a Telegram?": {
+      "main": [
+        [
+          {
+            "node": "15A - Enviar por Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Operation, do nothing1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01 - Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "01b - Filtrar bots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01b - Filtrar bots": {
+      "main": [
+        [
+          {
+            "node": "03 - Normalizar + TraceID",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Operation, do nothing2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "5ae2448c-75c5-46a9-a2ba-7b9877de0630",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "a96acdcb33ae9960d28b918b81602821e5ec309333d594282858d211d95d9e73"
+  },
+  "nodeGroups": [],
+  "id": "tXUEH7tqiz5E1YAH",
+  "tags": []
+}

@@ -1,0 +1,664 @@
+{
+  "name": "WF_WORKER_ATENCION",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "traceId"
+            },
+            {
+              "name": "channel"
+            },
+            {
+              "name": "sender"
+            },
+            {
+              "name": "message"
+            },
+            {
+              "name": "intent"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "3685f355-66b2-41b4-85e9-242d8d1205e6",
+      "name": "01 - Entrada Worker"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const input = $json;\n\nconst traceId = String(input.traceId ?? '').trim();\nconst channel = String(input.channel ?? '').trim();\nconst sender = String(input.sender ?? '').trim();\nconst message = String(input.message ?? '').trim();\nconst intent = String(input.intent ?? '').trim().toUpperCase();\n\nlet valid = true;\nconst errors = [];\n\nif (!traceId) { valid = false; errors.push('Falta traceId'); }\nif (!channel) { valid = false; errors.push('Falta channel'); }\nif (!sender) { valid = false; errors.push('Falta sender'); }\nif (!message) { valid = false; errors.push('Falta message'); }\n\nif (intent !== 'ATENCION_HUESPED') {\n  valid = false;\n  errors.push('Intent invalido para Worker Atencion');\n}\n\nreturn {\n  json: {\n    traceId,\n    timestamp: new Date().toISOString(),\n    channel,\n    sender,\n    message,\n    intent,\n    validation: { valid, errors }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        256,
+        0
+      ],
+      "id": "978d5850-98e8-4ef2-986f-a507ed676443",
+      "name": "02 - Validar Entrada"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "0f0f9bfc-cece-4418-8fc7-eef49ddcf7dd",
+              "leftValue": "={{ $json.validation.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        464,
+        0
+      ],
+      "id": "a3e60116-e77a-4c37-9686-723fc440903c",
+      "name": "03 - Entrada válida?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $json;\n\nreturn {\n  json: {\n    status: 'RECHAZADO',\n    approved: false,\n    response: null,\n\n    error: {\n      code: 'INVALID_WORKER_INPUT',\n      message: 'La entrada recibida por el Worker de Atencion no cumple con los campos requeridos.',\n      details: input.validation?.errors ?? []\n    },\n\n    traceId: input.traceId ?? null,\n    timestamp: new Date().toISOString(),\n\n    worker: {\n      workflow: 'WF_WORKER_ATENCION',\n      stage: 'VALIDACION_ENTRADA'\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        592,
+        336
+      ],
+      "id": "0d917a9a-581b-4790-a124-603951b855b8",
+      "name": "03-FALSE - Entrada Inválida"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "Eres el asistente de atención al huésped del Hotel Playa.\n\nTenés acceso a una herramienta llamada \"Pinecone Assistant Tool\" que consulta el manual oficial del hotel.\n\nREGLA CRÍTICA:\n- ANTES de responder CUALQUIER consulta factual, DEBÉS consultar la herramienta Pinecone.\n- NUNCA respondas de memoria. NUNCA uses tu conocimiento previo del mundo.\n- Si la tool no devuelve información, decí que no tenés esa información y que recepción puede ayudar.\n- No es opcional: SIEMPRE invocá la tool primero.\n\nTEMAS donde SIEMPRE debés usar la tool:\n- Horarios (check-in, check-out, desayuno, pileta, room service, etc.)\n- Servicios (wifi, estacionamiento, gimnasio, lavandería, etc.)\n- Políticas (mascotas, fumadores, cancelación, menores, etc.)\n- Información general (dirección, contacto, accesibilidad, etc.)\n\nTEMAS donde NO debés usar la tool:\n- Quejas o pedidos especiales (\"el aire no funciona\", \"necesito toallas\") → derivá a recepción.\n- Reservas, precios o disponibilidad → derivá al área correspondiente.\n\nREGLAS DE RESPUESTA:\n1. Usá exclusivamente la información que devuelve la tool.\n2. NO inventes.\n3. Tono cordial, claro, breve. Apto para WhatsApp.\n4. Responde en español.\n5. NO uses markdown (ni **, *, #, backticks). Texto plano.\n6. NO prometas acciones. Frases PROHIBIDAS:\n   - \"Le contactaré con recepción\"\n   - \"Me comunicaré con...\"\n   - \"Le avisaré a...\"\n   - \"Gestionaré su caso\"\n   - \"Voy a derivar su caso\"\n   - \"He avisado a recepción\"\n\n   FRASES CORRECTAS para derivar:\n   - \"Su caso será derivado a recepción.\"\n   - \"Recepción puede ayudarle con esto.\"\n   - \"Por favor, contacte a recepción para resolverlo.\"\n   - \"Le recomiendo contactar a recepción para que lo resuelvan.\"\n7. Si el huésped pregunta sobre una QUEJA o PEDIDO ESPECIAL, respondé indicando\n   que puede contactar a recepción, sin prometer que vos vas a hacer algo.\n8. CARGOS POR SERVICIOS:\n   - Si el huésped pregunta por un servicio que tiene cargo (mascotas,\n     room service, transfer, lavandería, multa por fumar, etc.):\n     * Si NO pregunta el monto: confirmá que existe el cargo, sin mencionar\n       el importe. Ejemplo: \"Sí, aceptamos mascotas. Hay un cargo por noche.\"\n     * Si pregunta explícitamente el monto (\"¿cuánto?\", \"¿cuánto sale?\",\n       \"¿cuál es el costo?\"): mencioná el monto. Ejemplo: \"Sí, el cargo por\n       mascota es de $5.000 por noche.\"\n9. NUNCA informes precios de habitaciones ni disponibilidad. Eso lo maneja\n   otra área del sistema. Si te preguntan, derivá.\n\nMENSAJE DEL HUÉSPED:\n{{ $json.message }}",
+          "maxIterations": 5,
+          "returnIntermediateSteps": true
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        928,
+        -16
+      ],
+      "id": "6ee2a91c-9f2f-4fd7-aa31-2866793c423a",
+      "name": "04 - AI Agent",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-oss-120b",
+        "options": {
+          "maxTokensToSample": 800,
+          "temperature": "={{ 0.2 }}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        880,
+        160
+      ],
+      "id": "60e2af40-c7d1-47a9-9861-c7bc7f81adea",
+      "name": "Groq Chat Model",
+      "credentials": {
+        "groqApi": {
+          "id": "Mjz9M0wP6JPLiyNU",
+          "name": "Groq account 4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assistantData": "{\"name\":\"hotel-playa-faq\",\"host\":\"https://prod-1-data.ke.pinecone.io\"}",
+        "query": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Query', `Consulta el manual de políticas y servicios del Hotel Playa. Usala para responder consultas sobre horarios, servicios, políticas e información general del hotel.`, 'string') }}",
+        "additionalFields": {}
+      },
+      "type": "@pinecone-database/n8n-nodes-pinecone-assistant.pineconeAssistantTool",
+      "typeVersion": 1.2,
+      "position": [
+        1104,
+        160
+      ],
+      "id": "04df7602-f39f-4a8f-a1fd-62e3be3b2a62",
+      "name": "Get context snippets in Pinecone Assistant",
+      "credentials": {
+        "pineconeApi": {
+          "id": "NXFP97edSRNU4u2M",
+          "name": "Pinecone account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const agent = $json;\nconst ctx = $('02 - Validar Entrada').first().json;\n\n// Extraer chunks del intermediateSteps del Agent\nconst steps = agent.intermediateSteps || [];\nconst chunks = [];\n\nfor (const step of steps) {\n  const obs = step.observation;\n  if (!obs) continue;\n\n  try {\n    const parsed = JSON.parse(obs);\n    const arr = Array.isArray(parsed) ? parsed : [parsed];\n    for (const item of arr) {\n      if (item.snippets && Array.isArray(item.snippets)) {\n        for (const snippet of item.snippets) {\n          if (snippet.content) {\n            chunks.push({\n              content: String(snippet.content),\n              score: snippet.score || null\n            });\n          }\n        }\n      }\n    }\n  } catch (e) {\n    chunks.push({\n      content: String(obs).slice(0, 3000),\n      score: null\n    });\n  }\n}\n\n// Detectar si el mensaje es una queja o pedido especial\nconst mensaje = String(ctx.message || '');\nconst esQueja = /\\b(no funciona|no anda|roto|rota|no tengo|falta|necesito|pido|solicito|reclamo|queja|problema|falla|aver[ií]a|sucio|sucia|ruido|molestia|p[eé]simo|mal[ií]simo)\\b/i.test(mensaje);\n\nreturn {\n  json: {\n    traceId: ctx.traceId,\n    timestamp: ctx.timestamp,\n    channel: ctx.channel,\n    sender: ctx.sender,\n    message: ctx.message,\n    intent: ctx.intent,\n\n    response: agent.output,\n\n    chunks: chunks,\n    chunkCount: chunks.length,\n    hasContext: chunks.length > 0,\n\n    esQueja: esQueja\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1504,
+        -16
+      ],
+      "id": "714d924c-764d-4746-a812-9ca1e68448d4",
+      "name": "05 - Extraer Contexto"
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"faithfulness\": { \"type\": \"number\", \"minimum\": 1, \"maximum\": 5 },\n    \"policy_compliance\": { \"type\": \"boolean\" },\n    \"action_safety\": { \"type\": \"boolean\" },\n    \"tone_and_clarity\": { \"type\": \"number\", \"minimum\": 1, \"maximum\": 5 },\n    \"approved\": { \"type\": \"boolean\" },\n    \"reason\": { \"type\": \"string\" }\n  },\n  \"required\": [\n    \"faithfulness\",\n    \"policy_compliance\",\n    \"action_safety\",\n    \"tone_and_clarity\",\n    \"approved\",\n    \"reason\"\n  ]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1872,
+        176
+      ],
+      "id": "e8c72dab-5d39-4ec3-9eef-cf841b5f88fb",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-oss-120b",
+        "options": {
+          "maxTokens": 2000,
+          "temperature": "={{ 0.2 }}",
+          "timeout": 5000,
+          "maxRetries": 3
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        1728,
+        176
+      ],
+      "id": "4211e478-a2ff-4a39-9098-c6d12ec8721e",
+      "name": "OpenRouter Chat Model",
+      "credentials": {
+        "openRouterApi": {
+          "id": "XszMsDI8Ipu9jc7D",
+          "name": "OpenRouter account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "864bb37c-f146-494b-90f4-710dea451ef0",
+              "leftValue": "={{ $json.output.approved }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2064,
+        -16
+      ],
+      "id": "eaf484c0-8191-4d46-946c-0f47e8c99d3b",
+      "name": "07 - Action Gate"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const judge = $('06 - Judge').first().json.output;\n\nlet traceId = null;\ntry {\n  traceId = $('05 - Extraer Contexto').first().json.traceId;\n} catch (e) {\n  traceId = null;\n}\n\nreturn {\n  json: {\n    status: 'BLOQUEADO',\n    approved: false,\n    response: null,\n\n    traceId: traceId,\n    timestamp: new Date().toISOString(),\n\n    judge: judge,\n\n    escalation: {\n      required: true,\n      reason: judge && judge.reason ? judge.reason : 'La respuesta de atención no superó las validaciones de seguridad.'\n    },\n\n    worker: {\n      workflow: 'WF_WORKER_ATENCION',\n      stage: 'ACTION_GATE'\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2352,
+        192
+      ],
+      "id": "28cbff90-46bc-4d10-badb-872fe415a344",
+      "name": "07-FALSE - Bloqueo de Seguridad"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const contexto = $('05 - Extraer Contexto').first().json;\nconst judge = $('06 - Judge').first().json.output;\n\nconst texto = String(contexto.response ?? '').trim();\nconst responseFinal = texto.length > 0\n  ? texto\n  : 'No pudimos procesar tu consulta en este momento. Por favor, contactá a recepción.';\n\nreturn {\n  json: {\n    traceId: contexto.traceId,\n    timestamp: new Date().toISOString(),\n\n    channel: contexto.channel,\n    sender: contexto.sender,\n    message: contexto.message,\n    intent: contexto.intent,\n\n    approved: judge.approved,\n    response: responseFinal,\n\n    esQueja: contexto.esQueja || false,\n\n    worker: {\n      workflow: 'WF_WORKER_ATENCION',\n      stage: 'RESPUESTA_FINAL'\n    },\n\n    judge: judge\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2352,
+        -32
+      ],
+      "id": "3d43c0a2-85f1-451a-9876-d00ba49f60aa",
+      "name": "08 - Preparar Respuesta Final"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const input = $json;\n\nreturn {\n  json: {\n    traceId: input.traceId ?? null,\n    timestamp: new Date().toISOString(),\n\n    channel: input.channel,\n    recipient: input.sender,\n\n    originalMessage: input.message,\n    message: input.response,\n\n    approved: input.approved,\n\n    esQueja: input.esQueja || false,\n\n    judge: input.judge ?? null,\n\n    worker: {\n      workflow: 'WF_WORKER_ATENCION',\n      stage: 'DISPATCH'\n    },\n\n    dispatch: {\n      ready: true,\n      source: 'WF_WORKER_ATENCION'\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2608,
+        -32
+      ],
+      "id": "b664d532-270c-4144-b4c8-9cd208a605b2",
+      "name": "09 - Preparar Dispatch"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=RESPUESTA GENERADA:\n{{ $json.response }}\n\nES QUEJA O PEDIDO ESPECIAL:\n{{ $json.esQueja }}\n\nCONTEXTO RECUPERADO DEL MANUAL (chunks de Pinecone):\n{{ JSON.stringify($json.chunks) }}\n\nMENSAJE ORIGINAL DEL HUÉSPED:\n{{ $json.message }}\n\nEvalúa la respuesta utilizando exclusivamente la respuesta generada y los chunks recuperados.\nDevuelve únicamente el JSON solicitado.",
+        "hasOutputParser": true,
+        "needsFallback": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "Eres el evaluador de seguridad y calidad del sistema de atención al huésped del Hotel Playa.\n\nDebes evaluar EXCLUSIVAMENTE la respuesta generada y los chunks del manual que se usaron como fuente.\n\nCRITERIOS:\n\n1. faithfulness (1-5):\nEvalúa si TODA afirmación fáctica de la respuesta está respaldada por los chunks del manual.\n1 = contiene información inventada o contradictoria.\n3 = alguna afirmación no está respaldada por los chunks.\n5 = toda la información está respaldada por los chunks.\n\nIMPORTANTE: si chunks está vacío y la respuesta contiene información factual\nsobre el hotel, faithfulness debe ser 1 (el agente respondió sin consultar la fuente).\n\n2. policy_compliance (true/false):\n- true SOLO si la respuesta:\n  * no confirma reservas;\n  * NO informa precios de HABITACIONES ni disponibilidad;\n  * NO informa tarifas por noche de alojamiento, descuentos por pago\n    ni recargos;\n  * NO intenta resolver quejas o pedidos especiales por sí misma;\n  * si el huésped hizo una queja o pedido, la respuesta deriva a recepción.\n\n- REGLAS SOBRE CARGOS POR SERVICIOS (mascotas, room service, transfer,\n  lavandería, multa por fumar):\n\n  IMPORTANTE: distinguir entre \"el cargo existe\" y \"el monto del cargo\".\n  NO son lo mismo.\n\n  * CONFIRMAR QUE EXISTE UN CARGO → SIEMPRE PERMITIDO.\n    Frases como \"hay un cargo por noche\", \"tiene un costo adicional\",\n    \"se cobra un cargo por servicio\" son correctas y NO violan política.\n\n  * INFORMAR EL MONTO ESPECÍFICO ($5.000, $2.000, $25.000, etc.) →\n    SOLO PERMITIDO si el huésped preguntó explícitamente el monto\n    (\"¿cuánto?\", \"¿cuál es el costo?\", \"¿cuánto sale?\", \"¿qué precio\n    tiene?\").\n\n  Ejemplos correctos:\n    OK: \"Sí, aceptamos mascotas. Hay un cargo por noche.\" (sin monto)\n    OK: \"Sí, el cargo por mascota es de $5.000 por noche.\" (con monto, huésped preguntó)\n    VIOLACIÓN: \"Sí, aceptamos mascotas. Hay un cargo de $5.000 por noche.\" (con monto, huésped NO preguntó)\n\n  * NO puede informar precios de:\n    - Habitaciones (Standard, Superior, Premium)\n    - Tarifas por noche de alojamiento\n    - Descuentos por pago\n    - Disponibilidad\n\n- false en caso contrario.\n\n3. action_safety (true/false):\n- true SOLO si la respuesta no ejecuta ni promete ejecutar acciones\n  (no dice \"voy a reservar\", \"voy a llamar a recepción\", \"voy a enviar\").\n- false si promete acciones futuras.\n\n4. tone_and_clarity (1-5):\n1 = confusa, agresiva o inapropiada.\n3 = aceptable pero mejorable.\n5 = clara, cordial, breve, apta para WhatsApp.\n\nREGLA DE APROBACIÓN:\n\napproved = true SOLO SI:\nfaithfulness >= 4\nAND\npolicy_compliance = true\nAND\naction_safety = true\nAND\ntone_and_clarity >= 4\n\nEXCEPCIÓN - QUEJA O PEDIDO ESPECIAL (esQueja = true):\n\nSi ES QUEJA O PEDIDO ESPECIAL es true, entonces:\n- NO es necesario que chunks tenga contenido. Es esperado que esté vacío.\n- faithfulness debe ser 5 si la respuesta deriva a recepción sin prometer acciones\n  y sin inventar información sobre el hotel.\n- policy_compliance = true si la respuesta deriva correctamente.\n- action_safety = true si no promete acciones.\n- approved = true si el tono es >= 4.\n\nIMPORTANTE: si esQueja = true Y la respuesta contiene información inventada\n(horarios, precios, nombres, etc.) sin respaldo de chunks, faithfulness debe\nser 1 y approved false.\n\nIDIOMA:\nEl campo \"reason\" debe estar en español.\n\nFORMATO DE SALIDA:\nDevuelve ÚNICAMENTE un JSON válido con esta estructura:\n\n{\n  \"faithfulness\": 1,\n  \"policy_compliance\": true,\n  \"action_safety\": true,\n  \"tone_and_clarity\": 1,\n  \"approved\": true,\n  \"reason\": \"...\"\n}\n\nNo agregues texto fuera del JSON.\nNo uses backticks ni bloques de código markdown."
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        1728,
+        -16
+      ],
+      "id": "79a0aa76-2876-4dc6-a041-3ef87de03642",
+      "name": "06 - Judge",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "model": "nvidia/nemotron-3-ultra-550b-a55b",
+        "options": {
+          "frequencyPenalty": 0,
+          "temperature": "={{ 0.2 }}",
+          "maxRetries": 5
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatNvidia",
+      "typeVersion": 1,
+      "position": [
+        992,
+        160
+      ],
+      "id": "1e18dab5-180c-48c9-9824-3ac354ce2786",
+      "name": "NVIDIA Nemotron Chat Model",
+      "credentials": {
+        "nvidiaApi": {
+          "id": "j2gW89oiikvVfhgA",
+          "name": "NVIDIA Nemotron account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "nvidia/nemotron-3-super-120b-a12b",
+        "options": {
+          "temperature": "={{ 0.2 }}",
+          "timeout": 5000,
+          "maxRetries": 5
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatNvidia",
+      "typeVersion": 1,
+      "position": [
+        1808,
+        304
+      ],
+      "id": "315ffe96-1543-461d-b7a7-48a403eaa01e",
+      "name": "NVIDIA Nemotron Chat Model1",
+      "credentials": {
+        "nvidiaApi": {
+          "id": "j2gW89oiikvVfhgA",
+          "name": "NVIDIA Nemotron account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "# WF_WORKER_ATENCION\n\nResponde FAQ del hotel usando RAG con Pinecone Assistant.\nManeja consultas informativas, quejas y pedidos especiales.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🔀 FLUJO\nEntrada → Validar → AI Agent → Extraer Contexto\n→ Judge → Action Gate → Respuesta Final\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🧠 AI AGENT (nodo 04)\n• Chat Model: Groq gpt-oss-120b + fallback NVIDIA Nemotron.\n• Tool: Pinecone Assistant (index: hotel-playa-faq).\n• Return Intermediate Steps: activado para exponer los\n  chunks recuperados del manual.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n💾 RAG (Retrieval-Augmented Generation)\nEl manual de políticas fue parseado con LlamaParse y\nsubido a Pinecone Assistant. El Agent consulta la tool\nantes de responder. El Judge recibe los chunks y\nverifica fidelidad contra ellos.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n⚡ EXTRACCIÓN DE CONTEXTO (nodo 05)\n• Parsea intermediateSteps del Agent.\n• Extrae chunks con content y score.\n• Detecta si el mensaje es queja mediante regex.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🛡️ JUDGE\nfaithfulness / policy_compliance / action_safety /\ntone_and_clarity.\nExcepción: si esQueja = true, chunks puede estar vacío\n(el Agent correctamente no consultó Pinecone porque es\nuna queja, no una consulta factual).\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🛡️ POLÍTICA DE PRECIOS\n• Precio de habitación → nunca informar.\n• Cargo por servicio (mascota, room service) → informar\n  solo si el huésped pregunta el monto explícitamente.\n• Sin pregunta de monto → confirmar que existe, sin importe.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n⚙️ RESILIENCIA\nFallback LLM: Groq → NVIDIA Nemotron.\nRetry On Fail en AI Agent (2 intentos).",
+        "height": 944,
+        "width": 608,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        448,
+        -1168
+      ],
+      "typeVersion": 1,
+      "id": "98f25423-44b1-4bdd-b1b3-a7c2a9d8cdb7",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "🔵 01. ENTRADA\n• Valida traceId, channel, sender, intent.",
+        "height": 608,
+        "width": 848,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -48,
+        -112
+      ],
+      "typeVersion": 1,
+      "id": "b37750f5-ed9b-4408-804a-d36b28e23fb5",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "🟣 02. RAG CON PINECONE\n• AI Agent consulta el manual vía Pinecone.\n• Return Intermediate Steps expone los chunks.\n• Fallback LLM: Groq → NVIDIA Nemotron.",
+        "height": 608,
+        "width": 448,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        832,
+        -112
+      ],
+      "typeVersion": 1,
+      "id": "46de4dce-6801-4125-bc8f-48f972b7d73e",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "🟠 03. GUARDRAILS\n• Extrae chunks del Agent y detecta quejas.\n• Judge verifica fidelidad contra chunks.\n• Excepción: queja con chunks vacíos puede aprobar.",
+        "height": 608,
+        "width": 848,
+        "color": "#D53A07"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1376,
+        -112
+      ],
+      "typeVersion": 1,
+      "id": "535f9c7f-f937-411e-ade6-a6b1afac1473",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "content": "🟢 04. SALIDA\n• Respuesta final + dispatch.",
+        "height": 224,
+        "width": 624,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2256,
+        -112
+      ],
+      "typeVersion": 1,
+      "id": "2cf7b502-996e-450d-83ca-44f6f6d90503",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "content": "🔴 05. BLOQUEO\n• Respuesta no aprobada → no se envía.",
+        "height": 224,
+        "width": 624,
+        "color": "#DA0B0B"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2256,
+        128
+      ],
+      "typeVersion": 1,
+      "id": "def57502-57dd-4eba-b0ad-b4c2876f3107",
+      "name": "Sticky Note5"
+    },
+    {
+      "parameters": {
+        "content": "## Paleta de colores por tipo de bloque\nColor\t-\tUso\n🔵 Azul\t-\tIngesta y normalización\n🟣 Violeta  -\tRazonamiento / IA\n🟠 Naranja  -\tGuardrails / Judge\n🟢 Verde  -\tPersistencia y salida\n🔴 Rojo\t -\tBloqueo / Alertas",
+        "height": 208,
+        "width": 432,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1120,
+        -1168
+      ],
+      "typeVersion": 1,
+      "id": "4aafe058-8763-43c8-959f-71c35568521a",
+      "name": "Sticky Note7"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "01 - Entrada Worker": {
+      "main": [
+        [
+          {
+            "node": "02 - Validar Entrada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02 - Validar Entrada": {
+      "main": [
+        [
+          {
+            "node": "03 - Entrada válida?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03 - Entrada válida?": {
+      "main": [
+        [
+          {
+            "node": "04 - AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "03-FALSE - Entrada Inválida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "04 - AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get context snippets in Pinecone Assistant": {
+      "ai_tool": [
+        [
+          {
+            "node": "04 - AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04 - AI Agent": {
+      "main": [
+        [
+          {
+            "node": "05 - Extraer Contexto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "05 - Extraer Contexto": {
+      "main": [
+        [
+          {
+            "node": "06 - Judge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "06 - Judge",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "06 - Judge",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "07 - Action Gate": {
+      "main": [
+        [
+          {
+            "node": "08 - Preparar Respuesta Final",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "07-FALSE - Bloqueo de Seguridad",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "08 - Preparar Respuesta Final": {
+      "main": [
+        [
+          {
+            "node": "09 - Preparar Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "06 - Judge": {
+      "main": [
+        [
+          {
+            "node": "07 - Action Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NVIDIA Nemotron Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "04 - AI Agent",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "NVIDIA Nemotron Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "06 - Judge",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "22065181-e81b-4308-9e50-53ac8a03cdc1",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "a96acdcb33ae9960d28b918b81602821e5ec309333d594282858d211d95d9e73"
+  },
+  "nodeGroups": [],
+  "id": "kIHq1pA84y1ZHAlc",
+  "tags": []
+}

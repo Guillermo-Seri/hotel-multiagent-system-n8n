@@ -1,0 +1,4 @@
+categoria,precio_base,precio_extra_persona,capacidad_max
+STANDARD,21000,5000,2
+SUPERIOR,30000,6000,3
+PREMIUM,45000,7000,4

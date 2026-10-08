@@ -1,0 +1,681 @@
+{
+  "name": "WF_WORKER_DISPONIBILIDAD",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "traceId"
+            },
+            {
+              "name": "channel"
+            },
+            {
+              "name": "sender"
+            },
+            {
+              "name": "message"
+            },
+            {
+              "name": "intent"
+            },
+            {
+              "name": "fecha_inicio"
+            },
+            {
+              "name": "fecha_fin"
+            },
+            {
+              "name": "tipo"
+            },
+            {
+              "name": "categoria"
+            },
+            {
+              "name": "ocupacion",
+              "type": "number"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -352,
+        0
+      ],
+      "id": "550b3eb6-b343-4fe7-ba53-1173a021e982",
+      "name": "01 - Entrada Worker",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const input = $json;\n\n// Soporta tres origenes posibles:\n// - Execute Workflow del Manager: { traceId, channel, sender, message, intent, fecha_inicio, fecha_fin, tipo, categoria, ocupacion, payload? }\n// - Webhook directo: { body: { ... } }\n// - Chat Trigger: { chatInput, sessionId }\nconst data = input.body ?? input;\n\nconst traceId = String(\n  input.traceId ?? data.traceId ?? ''\n).trim();\n\nconst message = String(\n  data.message ??\n  data.text ??\n  data.chatInput ??\n  ''\n).trim();\n\nconst channel = String(\n  data.channel ??\n  (input.sessionId ? 'chat' : 'unknown')\n).trim();\n\nconst sender = String(\n  data.sender ??\n  data.from ??\n  input.sessionId ??\n  'unknown'\n).trim();\n\nconst intent = String(\n  data.intent ?? input.intent ?? ''\n).trim().toUpperCase();\n\n// ---------- Fechas ----------\nconst fechaInicioRaw =\n  String(\n    input.payload?.fechas?.fecha_inicio ??\n    input.payload?.fecha_inicio ??\n    input.fecha_inicio ??\n    data.fecha_inicio ??\n    ''\n  ).trim() || null;\n\nconst fechaFinRaw =\n  String(\n    input.payload?.fechas?.fecha_fin ??\n    input.payload?.fecha_fin ??\n    input.fecha_fin ??\n    data.fecha_fin ??\n    ''\n  ).trim() || null;\n\nconst tipoFecha =\n  input.payload?.fechas?.tipo ??\n  input.tipo ??\n  (fechaInicioRaw ? 'una_noche' : 'sin_fechas');\n\nconst categoria =\n  input.payload?.fechas?.categoria ??\n  input.categoria ??\n  null;\n\nconst ocupacion = Number(\n  input.payload?.fechas?.ocupacion ??\n  input.ocupacion ??\n  1\n) || 1;\n\nconst payload = {\n  fechas: {\n    tipo: tipoFecha,\n    fecha_inicio: fechaInicioRaw,\n    fecha_fin: fechaFinRaw,\n    categoria,\n    ocupacion\n  }\n};\n\n// ---------- Validaciones ----------\nlet valid = true;\nconst errors = [];\n\nif (!traceId) {\n  valid = false;\n  errors.push('Falta traceId');\n}\n\nif (!message) {\n  valid = false;\n  errors.push('Falta message');\n}\n\nif (!channel) {\n  valid = false;\n  errors.push('Falta channel');\n}\n\nif (!sender) {\n  valid = false;\n  errors.push('Falta sender');\n}\n\nif (intent !== 'DISPONIBILIDAD') {\n  valid = false;\n  errors.push('Intent invalido para Worker Disponibilidad');\n}\n\nreturn {\n  json: {\n    traceId,\n    timestamp: new Date().toISOString(),\n\n    channel,\n    sender,\n    message,\n    intent,\n\n    payload,\n\n    validation: {\n      valid,\n      errors\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -16,
+        0
+      ],
+      "id": "b4072388-33c4-48e8-9d5e-de08ffa3e39a",
+      "name": "02 - Validar Entrada"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "b95d37a1-5e57-499a-9309-75e1546114f0",
+              "leftValue": "={{ $json.validation.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        256,
+        0
+      ],
+      "id": "4b58cd1a-e08b-4665-959c-5a9d3554d797",
+      "name": "03 - Entrada válida?"
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-oss-120b",
+        "options": {
+          "maxTokensToSample": 500,
+          "temperature": "={{ 0.2 }}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        1376,
+        128
+      ],
+      "id": "2ea311c5-f1b8-475a-a9a8-ebe6bb7ed1d6",
+      "name": "Groq Chat Model",
+      "credentials": {
+        "groqApi": {
+          "id": "Mjz9M0wP6JPLiyNU",
+          "name": "Groq account 4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "==Mensaje del huésped:\n{{ $json.message }}\n\nResultado de disponibilidad:\n{{ JSON.stringify({\n  faltanFechas: $json.result.faltanFechas,\n  fechaPasada: $json.result.fechaPasada,\n  fechaInicio: $json.result.fechaInicio,\n  fechaFin: $json.result.fechaFin,\n  cantidadNoches: $json.result.cantidadNoches,\n  fechasSinDatos: $json.result.fechasSinDatos,\n  hayDisponibilidad: $json.result.habitacionesDisponibles.length > 0,\n  cantidadDisponibles: $json.result.cantidadDisponibles,\n  categoriaSolicitada: $json.result.categoriaSolicitada,\n  ocupacion: $json.result.ocupacion,\n  categoriasDisponibles: $json.result.categoriasDisponibles\n}) }}\n\nGenerá una respuesta breve para el huésped utilizando únicamente estos datos.",
+        "needsFallback": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "Eres el generador de respuestas del sistema de disponibilidad de un hotel.\n\nTu tarea es redactar una respuesta para el huésped utilizando EXCLUSIVAMENTE los datos proporcionados en la entrada y teniendo en cuenta exactamente lo que el huésped consultó.\n\nREGLAS:\n\n1. No inventes disponibilidad, precios, servicios, fechas ni condiciones.\n2. No agregues información que no aparezca en los datos recibidos.\n3. Responde únicamente sobre la información relevante para la consulta del huésped.\n4. Si el huésped consulta por una fecha específica, responde únicamente con la disponibilidad correspondiente a esa fecha.\n5. Si el huésped consulta por una categoría específica (Standard, Superior, Premium), respondé solo sobre esa categoría. Si pide códigos específicos (STD-01, etc.), derivá a recepción.\n6. Si el huésped consulta de manera general por disponibilidad, indicá simplemente que hay disponibilidad (o que no la hay).\n7. NO informes cantidades o totales globales de habitaciones disponibles u ocupadas, salvo que el huésped haya preguntado explícitamente por una cantidad.\n8. NO enumeres las habitaciones disponibles (STD-01, SUP-01, etc.) salvo que el huésped haya pedido explícitamente conocerlas. En ese caso, podés listarlas.\n9. No menciones habitaciones ocupadas salvo que sea relevante para responder directamente a la consulta.\n10. No confirmes una reserva.\n11. No afirmes que una habitación está disponible si los datos no lo indican.\n12. Si no hay información suficiente para responder, indícalo claramente.\n13. Mantén un tono cordial, claro y profesional.\n14. Responde en español.\n15. La respuesta debe ser breve y adecuada para WhatsApp.\n16. Si result.faltanFechas es true, pide amablemente las fechas de entrada y salida.\n17. Si result.fechaPasada es true, indica que la fecha consultada ya pasó y pide una fecha futura.\n18. Si result.fechasSinDatos tiene elementos, indicá que por el momento no tenés cargada la disponibilidad de esas fechas y que recepción la confirmará a la brevedad.\n19. result.habitacionesDisponibles son las habitaciones libres durante TODAS las noches consultadas. Si está vacío, informa que no hay disponibilidad para esas fechas.\n20. Al mencionar fechas, usá el formato \"5 de octubre\" o \"5 de octubre de 2026\". EVITÁ el formato numérico corto \"05/10\" o \"05/10/2026\".\n21. NUNCA preguntes al huésped si quiere reservar. NUNCA ofrezcas gestionar una reserva. NUNCA uses frases como \"¿Te gustaría reservar?\" o \"¿Querés que te reserve?\".\n22. Si el mensaje del huésped pide reservar, modificar o cancelar una reserva, NO generes una respuesta de disponibilidad. Indicá brevemente que la consulta será derivada a recepción para su gestión.\n23. En los datos recibidos NO tenés la lista de habitaciones. No inventes ni nombres ni códigos de habitaciones. Si el huésped pregunta por habitaciones específicas, indicá que recepción puede informarle los detalles.\n24. Si result.cantidadNoches es mayor a 1, mencioná la cantidad de noches Y la fecha de salida. Ejemplo: \"2 noches desde el 5 de octubre, con salida el 7 de octubre\". NUNCA uses el formato \"del X al Y\".\n25. Si el huésped pregunta por las habitaciones específicas (códigos o tipos), NO informes la cantidad. Indicá solamente que recepción puede darle el detalle. Reservá las cantidades para cuando el huésped pregunte explícitamente \"¿cuántas?\".\n26. Si el huésped consultó por tarifas (mencionó precio, cuánto sale, cuánto cuesta, tarifa, $), usá EXCLUSIVAMENTE los valores de result.categoriasDisponibles. NO inventes precios.\n27. Al informar tarifas:\n    - Si el huésped pidió una categoría específica, informá solo esa.\n    - Si no pidió categoría, informá las categorías que tengan apta = true.\n    - Si cantidadNoches = 1: \"La tarifa para [categoría] es de $X por noche.\"\n    - Si cantidadNoches > 1: \"La tarifa para [categoría] es de $X por noche, y el total por N noches es $Y.\"\n28. Si una categoría tiene apta = false, NO la ofrezcas. Si el huésped pidió específicamente una categoría no apta, indicá que esa categoría no admite esa cantidad de personas y sugerí las que sí son aptas.\n29. Si el huésped preguntó por disponibilidad pero NO por tarifas, NO menciones precios. Solo disponibilidad.\n30. Al mencionar montos, usá formato con separador de miles y símbolo $. Ejemplo: \"$21.000\" o \"$118.000\". No escribas \"21000\".\n\nIMPORTANTE:\n\nLos datos recibidos pueden contener información adicional utilizada internamente por el sistema, como cantidades totales, habitaciones ocupadas o registros correspondientes a otras fechas.\n\nEsa información NO debe incluirse automáticamente en la respuesta.\n\nDebes priorizar siempre la intención y el contenido de la consulta del huésped.\n\nEjemplos:\n\nSi el huésped pregunta:\n\"¿Hay disponibilidad para el viernes?\"\n\nRespuesta esperada:\n\"Sí, tenemos disponibilidad para el viernes.\"\n\nNo responder:\n\"Hay 6 habitaciones disponibles y 2 ocupadas.\"\nNo responder:\n\"Las habitaciones libres son STD-01, SUP-01, PRE-01.\"\n\nSi el huésped pregunta:\n\"¿Qué habitaciones tienen libres para el 30 de septiembre?\"\n\nRespuesta esperada:\n\"Para el 30 de septiembre hay disponibilidad. Para conocer los códigos y tipos específicos, recepción puede informarte.\"\n\nSi el huésped pregunta:\n\"¿Cuántas habitaciones tienen disponibles?\"\n\nY result.cantidadDisponibles es 3:\n\nRespuesta esperada:\n\"Tenemos 3 habitaciones disponibles para esas fechas.\"\n\nSi result.habitacionesDisponibles está vacío:\n\nRespuesta esperada:\n\"Lamentablemente no tenemos disponibilidad para esas fechas.\"\n\nSi el huésped pregunta:\n\"Reservame una habitación para el 30 de septiembre.\"\n\nRespuesta esperada:\n\"Para gestionar una reserva, por favor contactá a recepción. Mientras tanto, puedo informarte la disponibilidad si lo necesitás.\"\n\nSi el huésped pregunta:\n\"¿Cuánto sale una Superior para el viernes?\"\n\nY result.categoriasDisponibles incluye { categoria: \"SUPERIOR\", precio_noche: 30000, apta: true }:\n\nRespuesta esperada:\n\"La tarifa para Superior es de $30.000 por noche. Tenemos disponibilidad para el viernes.\"\n\nSi el huésped pregunta:\n\"¿Cuánto sale una Premium para 3 personas del 5 al 7 de octubre?\"\n\nY result.categoriasDisponibles incluye { categoria: \"PREMIUM\", precio_noche: 59000, precio_total: 118000, apta: true } y cantidadNoches = 2:\n\nRespuesta esperada:\n\"La tarifa Premium para 3 personas es de $59.000 por noche. Por 2 noches, el total es de $118.000.\"\n\nSi una categoría tiene apta = false y el huésped la pidió:\n\nRespuesta esperada:\n\"La categoría Standard no admite 3 personas. Para esa cantidad podés optar por Superior o Premium, ambas con disponibilidad.\""
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        1360,
+        -16
+      ],
+      "id": "a4b7e603-e2a6-4533-8d68-72d6ac0ca809",
+      "name": "06 - Generar Respuesta"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 05 - Preparar Resultado\nconst sheets = $('04b - Parsear Sheets').first().json;\nconst rows = sheets.disponibilidad;\nconst tarifasRows = sheets.tarifas;\nconst ctx = $('02 - Validar Entrada').first().json;\n\n// ---------- Utils ----------\nconst toISO = (v) => {\n  if (v === null || v === undefined || v === '') return null;\n  const s = String(v).trim();\n  let m = s.match(/^(\\d{4})-(\\d{2})-(\\d{2})/);\n  if (m) return `${m[1]}-${m[2]}-${m[3]}`;\n  m = s.match(/^(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})$/);\n  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;\n  return null;\n};\n\nconst addDays = (iso, n) => {\n  const d = new Date(iso + 'T00:00:00Z');\n  d.setUTCDate(d.getUTCDate() + n);\n  return d.toISOString().slice(0, 10);\n};\n\nconst categoriaDeHabitacion = (id) => {\n  const prefijo = String(id).split('-')[0].toUpperCase();\n  const mapa = { STD: 'STANDARD', SUP: 'SUPERIOR', PRE: 'PREMIUM' };\n  return mapa[prefijo] ?? null;\n};\n\n// ---------- Fechas ----------\nconst fechas = ctx.payload?.fechas ?? {};\nconst fechaInicio = toISO(fechas.fecha_inicio);\nconst fechaFin = toISO(fechas.fecha_fin);\nconst tipoFecha = fechas.tipo ?? 'sin_fechas';\nconst categoriaSolicitada = fechas.categoria ?? null;\nconst ocupacion = Number(fechas.ocupacion ?? 1) || 1;\n\nconst hoy = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10);\n\n// ---------- Noches ----------\nconst noches = [];\nif (fechaInicio) {\n  if (!fechaFin || fechaFin <= fechaInicio) {\n    noches.push(fechaInicio);\n  } else {\n    for (let d = fechaInicio; d < fechaFin && noches.length < 90; d = addDays(d, 1)) {\n      noches.push(d);\n    }\n  }\n}\n\n// ---------- Disponibilidad ----------\nconst estadoPorNoche = {};\nconst habitaciones = new Set();\nfor (const r of rows) {\n  const f = toISO(r.fecha);\n  const id = String(r.habitacion_id ?? '').trim();\n  if (!f || !id) continue;\n  habitaciones.add(id);\n  (estadoPorNoche[f] ??= {})[id] = String(r.estado ?? '').trim().toUpperCase();\n}\n\nconst fechasSinDatos = noches.filter(n => !estadoPorNoche[n]);\nconst habitacionesDisponibles = [...habitaciones].filter(id =>\n  noches.length > 0 &&\n  noches.every(n => estadoPorNoche[n]?.[id] === 'DISPONIBLE')\n);\n\n// ---------- Tarifas ----------\nconst tarifasPorCategoria = {};\nfor (const t of tarifasRows) {\n  const cat = String(t.categoria ?? '').trim().toUpperCase();\n  if (!cat) continue;\n  tarifasPorCategoria[cat] = {\n    precioBase: Number(t.precio_base),\n    precioExtra: Number(t.precio_extra_persona),\n    capacidadMax: Number(t.capacidad_max)\n  };\n}\n\n// ---------- Categorias disponibles ----------\nconst categoriasUnicas = [...new Set(\n  habitacionesDisponibles.map(categoriaDeHabitacion).filter(Boolean)\n)];\n\nconst categoriasDisponibles = categoriasUnicas.map(cat => {\n  const t = tarifasPorCategoria[cat];\n  if (!t) return null;\n\n  const apta = ocupacion <= t.capacidadMax;\n  const precioNoche =\n    t.precioBase + Math.max(0, ocupacion - 1) * t.precioExtra;\n  const precioTotal = precioNoche * Math.max(1, noches.length);\n\n  return {\n    categoria: cat,\n    precio_noche: precioNoche,\n    precio_total: precioTotal,\n    capacidad_max: t.capacidadMax,\n    apta\n  };\n}).filter(Boolean);\n\n// ---------- Output ----------\nreturn [{\n  json: {\n    traceId: ctx.traceId,\n    timestamp: ctx.timestamp,\n    channel: ctx.channel,\n    sender: ctx.sender,\n    message: ctx.message,\n    intent: ctx.intent,\n    payload: {\n      fechas: {\n        tipo: tipoFecha,\n        fecha_inicio: fechaInicio,\n        fecha_fin: fechaFin,\n        categoria: categoriaSolicitada,\n        ocupacion\n      }\n    },\n\n    result: {\n      faltanFechas: !fechaInicio,\n      fechaPasada: !!fechaInicio && fechaInicio < hoy,\n      fechaInicio,\n      fechaFin,\n      cantidadNoches: noches.length,\n      ocupacion,\n      categoriaSolicitada,\n      fechasSinDatos,\n      habitacionesDisponibles,\n      cantidadDisponibles: habitacionesDisponibles.length,\n      categoriasDisponibles\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1152,
+        -16
+      ],
+      "id": "376fbc4d-fc5f-409c-a010-222de21a4592",
+      "name": "05 - Preparar Resultado"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=RESPUESTA GENERADA:\n\n{{ $json.text }}\n\nDATOS QUE RESPALDAN LA RESPUESTA:\n\n{{ JSON.stringify($('05 - Preparar Resultado').first().json.result) }}\n\nMENSAJE ORIGINAL DEL HUÉSPED:\n\n{{ $('05 - Preparar Resultado').first().json.message }}\n\nEvalúa la respuesta utilizando exclusivamente los datos anteriores.\nDevuelve únicamente el JSON solicitado.",
+        "hasOutputParser": true,
+        "needsFallback": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "Eres el evaluador de seguridad y calidad de respuestas de un sistema hotelero.\n\nTu función es evaluar la respuesta generada por otro modelo antes de enviarla al huésped.\n\nDebes evaluar EXCLUSIVAMENTE la respuesta y los datos proporcionados.\n\nCRITERIOS:\n\n1. faithfulness:\nEvalúa si la respuesta utiliza únicamente información respaldada por los datos.\nEscala 1 a 5:\n1 = contiene información inventada o contradice los datos.\n3 = contiene alguna afirmación dudosa o no suficientemente respaldada.\n5 = toda la información está respaldada por los datos.\n\n2. tone_and_clarity:\nEvalúa si la respuesta es clara, cordial, breve y adecuada para WhatsApp.\nEscala 1 a 5:\n1 = confusa, inapropiada o poco clara.\n3 = aceptable pero mejorable.\n5 = clara, cordial y adecuada.\nSi la respuesta está truncada a mitad de frase (termina con \"/\", \"-\", \"y\",\n\"del\", \"con\", o sin punto final), tone_and_clarity debe ser 1 y approved\ndebe ser false.\n\n3. policy_compliance:\nDebe ser true solamente si la respuesta:\n- no confirma una reserva;\n- no inventa precios, servicios o condiciones;\n- no afirma disponibilidad que no esté respaldada por los datos;\n- no ejecuta ni afirma haber ejecutado acciones.\n\npolicy_compliance debe ser false si la respuesta:\n- sugiere, insinúa o pregunta sobre reservar;\n- ofrece gestionar una reserva de cualquier forma;\n- enumera habitaciones específicas cuando el huésped no las pidió;\n- menciona precios que no coincidan con result.categoriasDisponibles;\n- ofrece una categoría con apta = false;\n- menciona precios cuando el huésped no los pidió;\n- calcula mal el total (precio_noche × cantidadNoches ≠ precio_total).\n\n4. action_safety:\nDebe ser true solamente si la respuesta no realiza ni afirma haber realizado ninguna acción irreversible o externa.\n\nREGLA DE APROBACIÓN:\n\napproved = true SOLO SI:\n\nfaithfulness >= 4\nAND\ntone_and_clarity >= 4\nAND\npolicy_compliance = true\nAND\naction_safety = true\n\nSi alguna condición no se cumple, approved debe ser false.\n\nDevuelve ÚNICAMENTE un JSON válido con esta estructura:\n\n{\n  \"faithfulness\": 1,\n  \"tone_and_clarity\": 1,\n  \"policy_compliance\": true,\n  \"action_safety\": true,\n  \"approved\": true,\n  \"reason\": \"...\"\n}\n\nNo agregues texto fuera del JSON."
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        1712,
+        -16
+      ],
+      "id": "c586b5b5-567c-4462-9cd8-2f21734eda48",
+      "name": "07 - Judge"
+    },
+    {
+      "parameters": {
+        "options": {
+          "maxTokens": 500,
+          "temperature": "={{ 0.2 }}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        1712,
+        128
+      ],
+      "id": "0a4be61c-9599-4f30-b8ac-354932eb1ce4",
+      "name": "OpenRouter Chat Model",
+      "credentials": {
+        "openRouterApi": {
+          "id": "XszMsDI8Ipu9jc7D",
+          "name": "OpenRouter account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"faithfulness\": 5,\n  \"tone_and_clarity\": 5,\n  \"policy_compliance\": true,\n  \"action_safety\": true,\n  \"approved\": true,\n  \"reason\": \"La respuesta coincide con los datos de disponibilidad, es clara y no confirma una reserva ni ejecuta acciones.\"\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1936,
+        128
+      ],
+      "id": "d8e7eac9-e99e-4724-a8e3-c9c82d0ffd8f",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "fe372eec-1d53-4a69-a7ca-84c542ece586",
+              "leftValue": "={{ $json.output.approved }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2064,
+        -16
+      ],
+      "id": "d88a493e-1996-435f-8ad6-c2413d67925a",
+      "name": "08 - Action Gate"
+    },
+    {
+      "parameters": {
+        "jsCode": "const resultado = $('05 - Preparar Resultado').first().json;\nconst respuesta = $('06 - Generar Respuesta').first().json;\nconst judge = $('07 - Judge').first().json.output;\n\nconst texto = String(respuesta.text ?? '').trim();\nconst responseFinal = texto.length > 0\n  ? texto\n  : 'No pudimos procesar tu consulta en este momento. Por favor, intentá de nuevo o contactá a recepción.';\n\nreturn [\n  {\n    json: {\n      traceId: resultado.traceId,\n      timestamp: resultado.timestamp,\n\n      channel: resultado.channel,\n      sender: resultado.sender,\n      message: resultado.message,\n      intent: resultado.intent,\n\n      approved: judge.approved,\n\n      response: responseFinal,\n\n      worker: {\n        workflow: 'WF_WORKER_DISPONIBILIDAD',\n        stage: 'RESPUESTA_FINAL'\n      },\n\n      judge: judge\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2384,
+        -32
+      ],
+      "id": "0c2890e8-27da-4e88-84b6-3f9703d7a354",
+      "name": "09 - Preparar Respuesta Final"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $json;\n\nreturn [\n  {\n    json: {\n      status: 'RECHAZADO',\n      approved: false,\n\n      error: {\n        code: 'INVALID_WORKER_INPUT',\n        message: 'La entrada recibida por el Worker no cumple con los campos requeridos.'\n      },\n\n      traceId: input.traceId ?? null,\n      timestamp: new Date().toISOString(),\n\n      worker: {\n        workflow: 'WF_WORKER_DISPONIBILIDAD',\n        stage: 'VALIDACION_ENTRADA'\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        368,
+        336
+      ],
+      "id": "9bbd2dd2-e982-428b-8f69-86abc8a014ab",
+      "name": "03-FALSE - Entrada Inválida"
+    },
+    {
+      "parameters": {
+        "jsCode": "const judge = $('07 - Judge').first().json.output;\n\n// traceId puede venir de 05, o de 02 si 05 no se ejecutó\nlet traceId = null;\ntry {\n  traceId = $('05 - Preparar Resultado').first().json.traceId;\n} catch (e) {\n  try {\n    traceId = $('02 - Validar Entrada').first().json.traceId;\n  } catch (e2) {\n    traceId = null;\n  }\n}\n\nreturn [\n  {\n    json: {\n      status: 'BLOQUEADO',\n      approved: false,\n\n      response: null,\n\n      traceId,\n      timestamp: new Date().toISOString(),\n\n      judge,\n\n      escalation: {\n        required: true,\n        reason: judge?.reason ?? 'La respuesta no superó las validaciones de seguridad.'\n      },\n\n      worker: {\n        workflow: 'WF_WORKER_DISPONIBILIDAD',\n        stage: 'ACTION_GATE'\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2384,
+        320
+      ],
+      "id": "3f920c59-dd26-4747-825a-110b8f541082",
+      "name": "08-FALSE - Bloqueo de Seguridad"
+    },
+    {
+      "parameters": {
+        "url": "https://sheets.googleapis.com/v4/spreadsheets/10gFlJkQOUzgQT1MpeErOF5qiUDqt4XuBKH0ROI4loFo/values:batchGet",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "ranges",
+              "value": "={{ [\"DISPONIBILIDAD!A:Z\", \"TARIFAS!A:Z\"] }}"
+            },
+            {
+              "name": "fields",
+              "value": "valueRanges(range,values)"
+            }
+          ]
+        },
+        "options": {
+          "queryParameterArrays": "repeat"
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        704,
+        -16
+      ],
+      "id": "4a96945d-2080-4553-a7a3-1eec0f074c6b",
+      "name": "04 - Leer Sheets (batchGet)",
+      "retryOnFail": true,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "hHMoqJelX7PETUy1",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// 04b - Parsear Sheets\n// Convierte la respuesta de batchGet (arrays de arrays) a objetos\n\nconst response = $json;\nconst ranges = response.valueRanges ?? [];\n\n// Convierte [[\"a\",\"b\"],[\"1\",\"2\"]] a [{a:\"1\",b:\"2\"}]\nconst rowsToObjects = (values) => {\n  if (!values || values.length < 2) return [];\n  const headers = values[0].map(h => String(h).trim().toLowerCase());\n  return values.slice(1).map(row => {\n    const obj = {};\n    headers.forEach((h, i) => {\n      obj[h] = row[i] ?? null;\n    });\n    return obj;\n  });\n};\n\n// Identifica cada rango por nombre\nconst dispRange = ranges.find(r =>\n  String(r.range ?? '').toUpperCase().startsWith('DISPONIBILIDAD')\n);\nconst tarRange = ranges.find(r =>\n  String(r.range ?? '').toUpperCase().startsWith('TARIFAS')\n);\n\nconst disponibilidad = rowsToObjects(dispRange?.values ?? []);\nconst tarifas = rowsToObjects(tarRange?.values ?? []);\n\nreturn {\n  json: {\n    disponibilidad,\n    tarifas,\n    _meta: {\n      disponibilidadRows: disponibilidad.length,\n      tarifasRows: tarifas.length\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        912,
+        -16
+      ],
+      "id": "55546127-13c5-4f86-acca-c84c0abca405",
+      "name": "04b - Parsear Sheets"
+    },
+    {
+      "parameters": {
+        "model": "nvidia/nemotron-3-super-120b-a12b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatNvidia",
+      "typeVersion": 1,
+      "position": [
+        1824,
+        128
+      ],
+      "id": "13c87205-8c1b-4aa5-b0e1-8bc16b06133a",
+      "name": "NVIDIA Nemotron Chat Model",
+      "credentials": {
+        "nvidiaApi": {
+          "id": "j2gW89oiikvVfhgA",
+          "name": "NVIDIA Nemotron account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatNvidia",
+      "typeVersion": 1,
+      "position": [
+        1520,
+        128
+      ],
+      "id": "22245d39-45b6-4cb8-8a99-0dbcafd00cda",
+      "name": "NVIDIA Nemotron Chat Model1",
+      "credentials": {
+        "nvidiaApi": {
+          "id": "j2gW89oiikvVfhgA",
+          "name": "NVIDIA Nemotron account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "# WF_WORKER_DISPONIBILIDAD\n\nResponde consultas de disponibilidad y tarifas.\nSolo lectura — no escribe en Sheets.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🔀 FLUJO\nEntrada → Validar → Leer Sheets (batchGet) → Parsear\n→ Preparar Resultado → Generar Respuesta → Judge\n→ Action Gate → Respuesta Final\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n💾 FUENTES DE DATOS\n• DISPONIBILIDAD: ventana rodante de 90 días.\n  Generada por fórmula MAKEARRAY + LET + SEQUENCE.\n• TARIFAS: precio_base + precio_extra_persona +\n  capacidad_max.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n⚡ OPTIMIZACIÓN batchGet\n04 - Leer Sheets usa HTTP Request con\nspreadsheets.values.batchGet. Una sola llamada lee\nlas 2 hojas. Reduce 50% el consumo de cuota Google.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n⚡ CÁLCULO DE PRECIO\nprecio_noche = base + (ocupacion − 1) × extra\nSi ocupacion > capacidad_max → apta: false.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🛡️ JUDGE\nEvalúa faithfulness, tone_and_clarity,\npolicy_compliance, action_safety.\nAprueba si faithfulness ≥ 4 AND tone ≥ 4 AND\npolicy AND action_safety.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n⚙️ RESILIENCIA\nFallback LLM: Groq → NVIDIA Nemotron.\nRetry On Fail: 3 intentos, 3-5s entre intentos.",
+        "height": 800,
+        "width": 752,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -480,
+        -1248
+      ],
+      "typeVersion": 1,
+      "id": "b43e6068-6780-4c2f-8ac0-bc5934bb5b34",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "🔵 01. ENTRADA Y VALIDACIÓN\n• Valida traceId, channel, sender, intent.\n• Fallback a Entrada Inválida si algo falta.",
+        "height": 736,
+        "width": 1008,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -496,
+        -208
+      ],
+      "typeVersion": 1,
+      "id": "1843badf-c53d-4b5c-a2dd-689857c96a95",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "🟣 02. LECTURA Y PREPARACIÓN\n• batchGet: 1 llamada lee DISPONIBILIDAD + TARIFAS.\n• Cálculo de precio por categoría y ocupación.\n• Reduce 50% cuota Google Sheets.",
+        "height": 736,
+        "width": 640,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        656,
+        -192
+      ],
+      "typeVersion": 1,
+      "id": "cafd0a46-8ace-4d65-8f98-3155b8c1cf12",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "🟠 03. GENERACIÓN Y GUARDRAILS\n• LLM genera respuesta con 30 reglas de política.\n• Judge evalúa fidelidad, tono y política.\n• Action Gate decide si enviar o bloquear.",
+        "height": 736,
+        "width": 864,
+        "color": "#C82B04"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1344,
+        -192
+      ],
+      "typeVersion": 1,
+      "id": "5924a0d9-23c0-40d6-adf2-019a52bff38c",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "content": "🟢 04. SALIDA\n• Prepara respuesta final con fallback si el LLM\n  devolvió texto vacío.",
+        "height": 320,
+        "width": 368,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2256,
+        -192
+      ],
+      "typeVersion": 1,
+      "id": "a46349e8-bec1-4dcc-bf7b-64f85e291203",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "content": "🔴 05. BLOQUEO\n• Respuesta no aprobada → no se envía al huésped.",
+        "height": 320,
+        "width": 368,
+        "color": "#D50707"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2256,
+        224
+      ],
+      "typeVersion": 1,
+      "id": "88398809-9f16-40ba-bffa-6176cd752208",
+      "name": "Sticky Note5"
+    },
+    {
+      "parameters": {
+        "content": "## Paleta de colores por tipo de bloque\nColor\t-\tUso\n🔵 Azul\t-\tIngesta y normalización\n🟣 Violeta  -\tRazonamiento / IA\n🟠 Naranja  -\tGuardrails / Judge\n🟢 Verde  -\tPersistencia y salida\n🔴 Rojo\t -\tBloqueo / Alertas\n",
+        "height": 208,
+        "width": 432,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        320,
+        -1248
+      ],
+      "typeVersion": 1,
+      "id": "73379d1e-c922-48b1-b0f4-476dd4c44134",
+      "name": "Sticky Note7"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "01 - Entrada Worker": {
+      "main": [
+        [
+          {
+            "node": "02 - Validar Entrada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02 - Validar Entrada": {
+      "main": [
+        [
+          {
+            "node": "03 - Entrada válida?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03 - Entrada válida?": {
+      "main": [
+        [
+          {
+            "node": "04 - Leer Sheets (batchGet)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "03-FALSE - Entrada Inválida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "06 - Generar Respuesta",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "05 - Preparar Resultado": {
+      "main": [
+        [
+          {
+            "node": "06 - Generar Respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "06 - Generar Respuesta": {
+      "main": [
+        [
+          {
+            "node": "07 - Judge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "07 - Judge",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "07 - Judge",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "07 - Judge": {
+      "main": [
+        [
+          {
+            "node": "08 - Action Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "08 - Action Gate": {
+      "main": [
+        [
+          {
+            "node": "09 - Preparar Respuesta Final",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "08-FALSE - Bloqueo de Seguridad",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04 - Leer Sheets (batchGet)": {
+      "main": [
+        [
+          {
+            "node": "04b - Parsear Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04b - Parsear Sheets": {
+      "main": [
+        [
+          {
+            "node": "05 - Preparar Resultado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NVIDIA Nemotron Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "07 - Judge",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "NVIDIA Nemotron Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "06 - Generar Respuesta",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "fb8db165-f39a-4f8a-9970-929cb5cd9fbb",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "a96acdcb33ae9960d28b918b81602821e5ec309333d594282858d211d95d9e73"
+  },
+  "nodeGroups": [],
+  "id": "Qor5RIDfVY1CbIK9",
+  "tags": []
+}

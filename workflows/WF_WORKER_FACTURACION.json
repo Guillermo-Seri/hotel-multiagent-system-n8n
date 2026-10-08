@@ -1,0 +1,713 @@
+{
+  "name": "WF_WORKER_FACTURACION",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "traceId"
+            },
+            {
+              "name": "channel"
+            },
+            {
+              "name": "sender"
+            },
+            {
+              "name": "message"
+            },
+            {
+              "name": "intent"
+            },
+            {
+              "name": "fecha_inicio"
+            },
+            {
+              "name": "fecha_fin"
+            },
+            {
+              "name": "tipo"
+            },
+            {
+              "name": "categoria"
+            },
+            {
+              "name": "ocupacion",
+              "type": "number"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "2684a694-f353-4d52-b580-74a5cbf7df86",
+      "name": "01 - Entrada Worker"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $json;\n\nconst traceId = String(input.traceId ?? '').trim();\nconst channel = String(input.channel ?? '').trim();\nconst sender = String(input.sender ?? '').trim();\nconst message = String(input.message ?? '').trim();\nconst intent = String(input.intent ?? '').trim().toUpperCase();\n\nlet valid = true;\nconst errors = [];\n\nif (!traceId) { valid = false; errors.push('Falta traceId'); }\nif (!channel) { valid = false; errors.push('Falta channel'); }\nif (!sender) { valid = false; errors.push('Falta sender'); }\nif (!message) { valid = false; errors.push('Falta message'); }\n\nif (intent !== 'FACTURA_PAGO') {\n  valid = false;\n  errors.push('Intent invalido para Worker Facturacion');\n}\n\nreturn {\n  json: {\n    traceId,\n    timestamp: new Date().toISOString(),\n\n    channel,\n    sender,\n    message,\n    intent,\n\n    validation: {\n      valid,\n      errors\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ],
+      "id": "8834cff3-272f-4029-9104-9769cbc522cb",
+      "name": "02 - Validar Entrada"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "094ed9cd-f9ef-4722-8bea-d264592f577f",
+              "leftValue": "={{ $json.validation.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        592,
+        0
+      ],
+      "id": "5bc3be08-e1c8-4e5c-a9c9-33fdc96bf145",
+      "name": "03 - Entrada válida?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $json;\n\nreturn {\n  json: {\n    status: 'RECHAZADO',\n    approved: false,\n    response: null,\n\n    error: {\n      code: 'INVALID_WORKER_INPUT',\n      message: 'La entrada recibida por el Worker de Facturacion no cumple con los campos requeridos.',\n      details: input.validation?.errors ?? []\n    },\n\n    traceId: input.traceId ?? null,\n    timestamp: new Date().toISOString(),\n\n    worker: {\n      workflow: 'WF_WORKER_FACTURACION',\n      stage: 'VALIDACION_ENTRADA'\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        736,
+        208
+      ],
+      "id": "8cd82c8b-e79c-4ef7-9197-ed3436a2e53d",
+      "name": "03-FALSE - Entrada Inválida"
+    },
+    {
+      "parameters": {
+        "url": "https://sheets.googleapis.com/v4/spreadsheets/10gFlJkQOUzgQT1MpeErOF5qiUDqt4XuBKH0ROI4loFo/values:batchGet",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "ranges",
+              "value": "'INFO-PAGOS'!A:Z"
+            },
+            {
+              "name": "ranges",
+              "value": "RESERVAS!A:Z"
+            },
+            {
+              "name": "ranges",
+              "value": "TARIFAS!A:Z"
+            },
+            {
+              "name": "fields",
+              "value": "valueRanges(range,values)"
+            }
+          ]
+        },
+        "options": {
+          "queryParameterArrays": "repeat"
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        864,
+        -16
+      ],
+      "id": "33314c4f-0839-4a98-8aab-af89240063a0",
+      "name": "04 - Leer Sheets (batchGet)",
+      "retryOnFail": true,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "hHMoqJelX7PETUy1",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $json;\nconst ranges = response.valueRanges || [];\n\nconst rowsToObjects = (values) => {\n  if (!values || values.length < 2) return [];\n  const headers = values[0].map(h => String(h).trim().toLowerCase());\n  return values.slice(1).map(row => {\n    const obj = {};\n    headers.forEach((h, i) => {\n      obj[h] = row[i] ?? null;\n    });\n    return obj;\n  });\n};\n\nconst rowsToKeyValue = (values) => {\n  if (!values || values.length < 2) return {};\n  const map = {};\n  for (let i = 1; i < values.length; i++) {\n    const row = values[i];\n    const k = String(row[0] || '').trim();\n    const v = String(row[1] || '').trim();\n    if (k) map[k] = v;\n  }\n  return map;\n};\n\n// Cambio: includes('INFO-PAGOS') en lugar de startsWith('INFO_PAGOS')\nconst infoPagosRange = ranges.find(r =>\n  String(r.range || '').toUpperCase().includes('INFO-PAGOS')\n);\nconst reservasRange = ranges.find(r =>\n  String(r.range || '').toUpperCase().startsWith('RESERVAS')\n);\nconst tarifasRange = ranges.find(r =>\n  String(r.range || '').toUpperCase().startsWith('TARIFAS')\n);\n\nconst infoPagos = rowsToKeyValue(infoPagosRange?.values || []);\nconst reservas = rowsToObjects(reservasRange?.values || []);\nconst tarifas = rowsToObjects(tarifasRange?.values || []);\n\nreturn {\n  json: {\n    infoPagos: infoPagos,\n    reservas: reservas,\n    tarifas: tarifas,\n    _meta: {\n      infoPagosKeys: Object.keys(infoPagos).length,\n      reservasRows: reservas.length,\n      tarifasRows: tarifas.length\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1088,
+        -16
+      ],
+      "id": "c9666ecc-7142-46eb-b72d-7f4054e00721",
+      "name": "04b - Parsear Sheets"
+    },
+    {
+      "parameters": {
+        "jsCode": "const sheets = $('04b - Parsear Sheets').first().json;\nconst ctx = $('02 - Validar Entrada').first().json;\n\nconst infoPagos = sheets.infoPagos || {};\nconst reservas = sheets.reservas || [];\nconst tarifas = sheets.tarifas || [];\n\n// ---------- Utilidades ----------\nconst toISO = (v) => {\n  if (v === null || v === undefined || v === '') return null;\n  const s = String(v).trim();\n  let m = s.match(/^(\\d{4})-(\\d{2})-(\\d{2})/);\n  if (m) return m[1] + '-' + m[2] + '-' + m[3];\n  m = s.match(/^(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})$/);\n  if (m) return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');\n  return null;\n};\n\nconst diffDays = (a, b) => {\n  const d1 = new Date(a + 'T00:00:00Z');\n  const d2 = new Date(b + 'T00:00:00Z');\n  return Math.max(1, Math.round((d2 - d1) / (24 * 60 * 60 * 1000)));\n};\n\nconst categoriaDeHabitacion = (id) => {\n  const prefijo = String(id).split('-')[0].toUpperCase();\n  const mapa = { STD: 'STANDARD', SUP: 'SUPERIOR', PRE: 'PREMIUM' };\n  return mapa[prefijo] || null;\n};\n\n// ---------- Detectar reserva_id en el mensaje ----------\nconst mensajeOriginal = ctx.message || '';\n// Patrón: RES-<timestamp>-<random>\nconst matchReserva = mensajeOriginal.match(/RES-\\d+-[a-z0-9]+/i);\nconst reservaIdSolicitada = matchReserva ? matchReserva[0] : null;\n\n// ---------- Detectar reclamo de cobro ----------\nconst esReclamoCobro = /\\b(cobr(o|aron|o otra vez|o dos veces|o mal)|doble cobro|me cobraron|error de cobro|reintegro|devoluci[oó]n)\\b/i.test(mensajeOriginal);\n\n// ---------- Buscar reserva si pidió por ID ----------\nlet reservaEncontrada = null;\nlet montoPendiente = null;\nlet nochesReserva = 0;\n\nif (reservaIdSolicitada) {\n  reservaEncontrada = reservas.find(r => \n    String(r.reserva_id || '').trim().toLowerCase() === reservaIdSolicitada.toLowerCase()\n  ) || null;\n\n  if (reservaEncontrada) {\n    const rIni = toISO(reservaEncontrada.fecha_entrada);\n    const rFin = toISO(reservaEncontrada.fecha_salida);\n    \n    if (rIni && rFin) {\n      nochesReserva = rFin > rIni ? diffDays(rIni, rFin) : 1;\n    }\n\n    // Buscar tarifa de la categoría\n    const cat = categoriaDeHabitacion(reservaEncontrada.habitacion_id);\n    const tarifa = tarifas.find(t => \n      String(t.categoria || '').trim().toUpperCase() === cat\n    );\n\n    if (tarifa) {\n      const precioBase = Number(tarifa.precio_base);\n      // No sabemos ocupación real de la reserva (no está en RESERVAS), \n      // asumimos 1 persona para el cálculo mínimo\n      const precioNoche = precioBase;\n      montoPendiente = precioNoche * nochesReserva;\n    }\n  }\n}\n\n// ---------- Info de pago de la hoja ----------\n// Exponemos solo lo que el LLM puede usar, sin exponer toda la hoja\nconst infoPagoPublica = {\n  cbu: infoPagos['CBU'] || null,\n  alias: infoPagos['Alias'] || null,\n  titular: infoPagos['Titular'] || null,\n  plazoPago: infoPagos['Plazo de pago'] || null,\n  recargoTarjeta: infoPagos['Recargo tarjeta'] || null,\n  descuentoTransferencia: infoPagos['Descuento transferencia'] || null,\n  mediosAceptados: infoPagos['Medios aceptados'] || null,\n  emailFacturacion: infoPagos['Email de facturación'] || null,\n  telefonoCobranzas: infoPagos['Teléfono de cobranzas'] || null\n};\n\n// ---------- Output ----------\nconst json = {\n  traceId: ctx.traceId,\n  timestamp: ctx.timestamp,\n  channel: ctx.channel,\n  sender: ctx.sender,\n  message: ctx.message,\n  intent: ctx.intent,\n\n  result: {\n    infoPago: infoPagoPublica,\n\n    reservaIdSolicitada: reservaIdSolicitada,\n    reservaEncontrada: reservaEncontrada ? {\n      reserva_id: reservaEncontrada.reserva_id,\n      habitacion_id: reservaEncontrada.habitacion_id,\n      fecha_entrada: reservaEncontrada.fecha_entrada,\n      fecha_salida: reservaEncontrada.fecha_salida,\n      estado: reservaEncontrada.estado,\n      pasajero: reservaEncontrada.pasajero || null\n    } : null,\n    montoPendiente: montoPendiente,\n    nochesReserva: nochesReserva,\n\n    esReclamoCobro: esReclamoCobro\n  }\n};\n\nreturn [{ json: json }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        -16
+      ],
+      "id": "21fe1172-34d9-4ce7-9faf-0c66fcdec3bc",
+      "name": "05 - Preparar Resultado"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "==Mensaje del huésped:\n{{ $json.message }}\n\nDatos de facturación y pago:\n{{ JSON.stringify({\n  infoPago: $json.result.infoPago,\n  reservaIdSolicitada: $json.result.reservaIdSolicitada,\n  reservaEncontrada: $json.result.reservaEncontrada,\n  montoPendiente: $json.result.montoPendiente,\n  nochesReserva: $json.result.nochesReserva,\n  esReclamoCobro: $json.result.esReclamoCobro\n}) }}\n\nGenerá una respuesta breve para el huésped utilizando únicamente estos datos.",
+        "needsFallback": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "Eres el generador de respuestas del sistema de facturación y pagos de un hotel.\n\nTu tarea es redactar una respuesta para el huésped sobre consultas de pago, facturación o estado de cuenta.\n\nREGLAS:\n\n1. Usá EXCLUSIVAMENTE los datos de infoPago, reservaEncontrada y montoPendiente.\n2. NUNCA inventes CBU, alias, precios, plazos ni medios de pago.\n3. NUNCA confirmes un pago recibido. NUNCA digas \"tu pago fue acreditado\".\n4. NUNCA ejecutes acciones (no podés emitir facturas, no podés registrar pagos).\n5. Si esReclamoCobro es true, derivá SIEMPRE a un operador humano.\n   NO intentes resolver el reclamo. NO prometas acciones.\n6. Si reservaIdSolicitada existe pero reservaEncontrada es null, indicá\n   que no encontraste esa reserva y que verifique el código.\n7. Si reservaEncontrada existe y montoPendiente tiene valor, informá el\n   monto pendiente junto con los métodos de pago.\n8. Si el huésped pregunta solo cómo pagar (sin reserva específica),\n   informá los métodos, CBU/alias y plazo.\n9. Tono cordial, claro, breve. Apto para WhatsApp.\n10. Responde en español.\n11. Al mencionar montos, usá formato con separador de miles y $: \"$21.000\".\n12. Al mencionar fechas, usá \"5 de octubre\". NO uses \"05/10\".\n\nCASOS ESPECÍFICOS:\n\nCASO A - Consulta genérica sobre métodos de pago (sin reserva_id):\n\"Podés abonar por transferencia bancaria al CBU [cbu] (alias [alias], titular [titular]).\nEl plazo es de [plazoPago]. También aceptamos [mediosAceptados].\nPara consultas de facturación: [emailFacturacion].\"\n\nCASO B - Consulta de estado con reserva_id encontrada:\n\"Tu reserva [reserva_id] está en estado [estado]. El monto pendiente es $[montoPendiente].\nPodés abonar por transferencia al CBU [cbu] (alias [alias]).\nEl plazo es de [plazoPago]. Con transferencia tenés un descuento del [descuentoTransferencia].\"\n\nCASO C - reserva_id no encontrada:\n\"No encontré una reserva con el código [reservaIdSolicitada]. Por favor verificá\nel código o contactá a recepción al [telefonoCobranzas].\"\n\nCASO D - Reclamo de cobro (esReclamoCobro = true):\n\"Lamento el inconveniente. Tu caso será derivado a un operador humano para su revisión.\nPodés contactar directamente a cobranzas al [telefonoCobranzas] o por email a [emailFacturacion].\"\n\nCASO E - Factura solicitada:\n\"Para solicitar tu factura, escribí a [emailFacturacion] indicando el código de reserva.\nRecepción te enviará el comprobante.\"\n\nNo agregues texto fuera de la respuesta al huésped.\n\nFORMATO DE SALIDA:\n- NO uses markdown. No uses **, *, _, `, # ni bloques de código.\n- NO uses saltos de línea dobles. Escribí todo en un párrafo continuo o\n  con saltos simples.\n- Texto plano. Apto para WhatsApp."
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        1712,
+        -16
+      ],
+      "id": "bf32ecaa-8489-40d4-a2ad-143ed645b404",
+      "name": "06 - Generar Respuesta",
+      "retryOnFail": true,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-oss-120b",
+        "options": {
+          "maxTokensToSample": 500,
+          "temperature": "={{ 0.2 }}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        1712,
+        192
+      ],
+      "id": "a8810fbc-2832-48fe-ad26-e97983287045",
+      "name": "Groq Chat Model",
+      "credentials": {
+        "groqApi": {
+          "id": "Mjz9M0wP6JPLiyNU",
+          "name": "Groq account 4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "==RESPUESTA GENERADA:\n{{ $json.text }}\n\nDATOS DE FACTURACIÓN:\n{{ JSON.stringify($('05 - Preparar Resultado').first().json.result) }}\n\nMENSAJE ORIGINAL DEL HUÉSPED:\n{{ $('05 - Preparar Resultado').first().json.message }}\n\nEvalúa la respuesta utilizando exclusivamente los datos anteriores.\nDevuelve únicamente el JSON solicitado.",
+        "hasOutputParser": true,
+        "needsFallback": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "Eres el evaluador de seguridad y calidad del sistema de facturación de un hotel.\n\nDebes evaluar EXCLUSIVAMENTE la respuesta generada y los datos de facturación.\n\nCRITERIOS:\n\n1. faithfulness (1-5):\n1 = inventa CBU, alias, montos o plazos que no están en los datos.\n3 = alguna afirmación dudosa.\n5 = todo respaldado por los datos de infoPago y reservaEncontrada.\n\n2. policy_compliance (true/false):\n- true SOLO si la respuesta:\n  * no inventa datos bancarios;\n  * no confirma pagos recibidos;\n  * no promete emitir facturas ni ejecutar acciones;\n  * no intenta resolver reclamos de cobro por sí misma.\n- false en caso contrario.\n\n3. payment_safety (true/false):\n- true SOLO si la respuesta NO afirma haber recibido un pago,\n  NO afirma haber modificado el estado de una reserva,\n  y NO ejecuta ninguna acción financiera.\n- false si dice cosas como \"tu pago fue acreditado\", \"actualicé tu estado\".\n\n4. tone_and_clarity (1-5):\n1 = confusa o inapropiada.\n3 = aceptable pero mejorable.\n5 = clara, cordial y adecuada para WhatsApp.\n\nREGLA DE APROBACIÓN:\n\napproved = true SOLO SI:\nfaithfulness >= 4\nAND\npolicy_compliance = true\nAND\npayment_safety = true\nAND\ntone_and_clarity >= 4\n\nEXCEPCIÓN - RECLAMO DE COBRO:\nSi result.esReclamoCobro = true Y la respuesta deriva a un operador humano\nsin intentar resolver el reclamo, entonces:\n- faithfulness debe ser >= 4 si menciona teléfono o email reales de infoPago.\n- policy_compliance = true.\n- payment_safety = true.\n- approved puede ser true.\n\nIDIOMA:\nEl campo \"reason\" debe estar en español.\n\nFORMATO DE SALIDA:\nDevuelve ÚNICAMENTE un JSON válido con esta estructura:\n\n{\n  \"faithfulness\": 1,\n  \"policy_compliance\": true,\n  \"payment_safety\": true,\n  \"tone_and_clarity\": 1,\n  \"approved\": true,\n  \"reason\": \"...\"\n}\n\nNo agregues texto fuera del JSON.\nNo uses backticks ni bloques de código markdown."
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        2064,
+        -16
+      ],
+      "id": "995d1955-4d74-4a3a-b625-cbce6edb375a",
+      "name": "07 - Judge",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"faithfulness\": { \"type\": \"number\", \"minimum\": 1, \"maximum\": 5 },\n    \"policy_compliance\": { \"type\": \"boolean\" },\n    \"payment_safety\": { \"type\": \"boolean\" },\n    \"tone_and_clarity\": { \"type\": \"number\", \"minimum\": 1, \"maximum\": 5 },\n    \"approved\": { \"type\": \"boolean\" },\n    \"reason\": { \"type\": \"string\" }\n  },\n  \"required\": [\n    \"faithfulness\",\n    \"policy_compliance\",\n    \"payment_safety\",\n    \"tone_and_clarity\",\n    \"approved\",\n    \"reason\"\n  ]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        2272,
+        176
+      ],
+      "id": "c3ccb4f3-ce34-4119-95cd-8f3b824fb090",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "82688543-aed7-44ae-bf43-f5cc8d4933d9",
+              "leftValue": "={{ $json.output.approved }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2480,
+        -16
+      ],
+      "id": "d1b69c8b-33a5-4d9e-a4cb-fb7d7ab96276",
+      "name": "08 - Action Gate"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const contexto = $('05 - Preparar Resultado').first().json;\nconst respuesta = $('06 - Generar Respuesta').first().json;\nconst judge = $('07 - Judge').first().json.output;\n\nconst texto = String(respuesta.text ?? '').trim();\nconst responseFinal = texto.length > 0\n  ? texto\n  : 'No pudimos procesar tu consulta de facturación en este momento. Por favor, contactá a recepción.';\n\nreturn {\n  json: {\n    traceId: contexto.traceId,\n    timestamp: new Date().toISOString(),\n\n    channel: contexto.channel,\n    sender: contexto.sender,\n    message: contexto.message,\n    intent: contexto.intent,\n\n    approved: judge.approved,\n    response: responseFinal,\n\n    esReclamoCobro: contexto.result.esReclamoCobro || false,\n\n    worker: {\n      workflow: 'WF_WORKER_FACTURACION',\n      stage: 'RESPUESTA_FINAL'\n    },\n\n    judge: judge\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2800,
+        -32
+      ],
+      "id": "45e5e055-7d22-432d-be2a-682f2e6e4295",
+      "name": "09 - Preparar Respuesta Final"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const judge = $('07 - Judge').first().json.output;\n\nlet traceId = null;\ntry {\n  traceId = $('05 - Preparar Resultado').first().json.traceId;\n} catch (e) {\n  try {\n    traceId = $('02 - Validar Entrada').first().json.traceId;\n  } catch (e2) {\n    traceId = null;\n  }\n}\n\nreturn {\n  json: {\n    status: 'BLOQUEADO',\n    approved: false,\n    response: null,\n\n    traceId: traceId,\n    timestamp: new Date().toISOString(),\n\n    judge: judge,\n\n    escalation: {\n      required: true,\n      reason: judge && judge.reason ? judge.reason : 'La respuesta de facturación no superó las validaciones de seguridad.'\n    },\n\n    worker: {\n      workflow: 'WF_WORKER_FACTURACION',\n      stage: 'ACTION_GATE'\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2768,
+        256
+      ],
+      "id": "bc40cf6e-cdab-4d9f-a156-9e45094c42b8",
+      "name": "08-FALSE - Bloqueo de Seguridad"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const input = $json;\n\nreturn {\n  json: {\n    traceId: input.traceId ?? null,\n    timestamp: new Date().toISOString(),\n\n    channel: input.channel,\n    recipient: input.sender,\n\n    originalMessage: input.message,\n    message: input.response,\n\n    approved: input.approved,\n\n    esReclamoCobro: input.esReclamoCobro || false,\n\n    judge: input.judge ?? null,\n\n    worker: {\n      workflow: 'WF_WORKER_FACTURACION',\n      stage: 'DISPATCH'\n    },\n\n    dispatch: {\n      ready: true,\n      source: 'WF_WORKER_FACTURACION'\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3168,
+        -32
+      ],
+      "id": "f6a6055b-9187-4ee8-aa07-45c1ec8c0ff7",
+      "name": "10 - Preparar Dispatch"
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-oss-120b",
+        "options": {
+          "maxTokens": 2000,
+          "temperature": "={{ 0.2 }}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        2064,
+        176
+      ],
+      "id": "92a8a353-c5e8-4d45-a441-742ba1d4b70c",
+      "name": "OpenRouter Chat Model",
+      "credentials": {
+        "openRouterApi": {
+          "id": "XszMsDI8Ipu9jc7D",
+          "name": "OpenRouter account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "options": {
+          "temperature": "={{ 0.2 }}",
+          "timeout": 5000,
+          "maxRetries": 3
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatNvidia",
+      "typeVersion": 1,
+      "position": [
+        1824,
+        192
+      ],
+      "id": "f999ff39-928d-4dd0-ad6f-c2a8d02da5da",
+      "name": "NVIDIA Nemotron Chat Model",
+      "credentials": {
+        "nvidiaApi": {
+          "id": "j2gW89oiikvVfhgA",
+          "name": "NVIDIA Nemotron account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "nvidia/nemotron-3-super-120b-a12b",
+        "options": {
+          "temperature": "={{ 0.2 }}",
+          "timeout": 5000,
+          "maxRetries": 3
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatNvidia",
+      "typeVersion": 1,
+      "position": [
+        2160,
+        176
+      ],
+      "id": "1e40a379-b100-48c6-b69f-479b3adea57e",
+      "name": "NVIDIA Nemotron Chat Model1",
+      "credentials": {
+        "nvidiaApi": {
+          "id": "j2gW89oiikvVfhgA",
+          "name": "NVIDIA Nemotron account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "# WF_WORKER_FACTURACION\n\nResponde consultas de pago, facturación y estado de cuenta.\nSolo lectura — nunca escribe en Sheets ni ejecuta acciones.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🔀 FLUJO\nEntrada → Validar → Leer Sheets (INFO-PAGOS + RESERVAS +\nTARIFAS) → Parsear → Preparar Resultado → Generar\nRespuesta → Judge → Action Gate → Respuesta Final\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n💾 FUENTES DE DATOS\n• INFO-PAGOS: CBU, alias, titular, plazos, recargos,\n  contactos. Formato clave-valor.\n• RESERVAS: para consultar estado si el huésped da el\n  reserva_id.\n• TARIFAS: para calcular monto pendiente.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n⚡ DETECCIÓN DE RECLAMOS (nodo 05)\nRegex detecta \"me cobraron\", \"doble cobro\", \"reintegro\",\netc. Si esReclamoCobro = true → deriva a operador humano.\nNunca intenta resolver el reclamo.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n⚡ MONTO PENDIENTE\nSi el huésped provee reserva_id, se calcula:\nnoches × precio_base de la categoría.\nNota: se asume ocupación 1 (limitación documentada\nporque RESERVAS no guarda la ocupación original).\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🛡️ JUDGE\nfaithfulness / policy_compliance / payment_safety /\ntone_and_clarity.\npayment_safety = false si confirma pagos o afirma haber\nmodificado estados de reserva.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n⚙️ RESILIENCIA\nFallback LLM: Groq → NVIDIA Nemotron.\nRetry On Fail en nodos críticos.",
+        "height": 848,
+        "width": 624,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        304,
+        -1040
+      ],
+      "typeVersion": 1,
+      "id": "52bb2b74-f8a7-45b0-b254-406579337a01",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "🔵 01. ENTRADA Y LECTURA\n• Solo lectura. Nunca escribe en Sheets.\n• Detecta reclamos de cobro vía regex.\n• Calcula monto si el huésped da reserva_id.",
+        "height": 624,
+        "width": 1632,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -64,
+        -112
+      ],
+      "typeVersion": 1,
+      "id": "f6445a3e-2fb9-452a-9bb3-fb24b3950419",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "🟠 02. GENERACIÓN Y GUARDRAILS\n• Judge evalúa payment_safety y política.\n• payment_safety = false si confirma pagos.",
+        "height": 624,
+        "width": 1024,
+        "color": "#C13506"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1632,
+        -112
+      ],
+      "typeVersion": 1,
+      "id": "03f6befc-73b0-4401-8336-29c378e457d4",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "🟢 03. SALIDA\n• Prepara respuesta + dispatch.",
+        "height": 256,
+        "width": 736,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2688,
+        -112
+      ],
+      "typeVersion": 1,
+      "id": "15f2569a-cce4-4c76-bc34-e1784d993116",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "content": "🔴 04. BLOQUEO\n• Respuesta no aprobada → no se envía.",
+        "height": 256,
+        "width": 736,
+        "color": "#E70D0D"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2688,
+        176
+      ],
+      "typeVersion": 1,
+      "id": "65597f6d-7cd1-4533-b4a8-3eec02d3a759",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "content": "## Paleta de colores por tipo de bloque\nColor\t-\tUso\n🔵 Azul\t-\tIngesta y normalización\n🟣 Violeta  -\tRazonamiento / IA\n🟠 Naranja  -\tGuardrails / Judge\n🟢 Verde  -\tPersistencia y salida\n🔴 Rojo\t -\tBloqueo / Alertas\n",
+        "height": 208,
+        "width": 432,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        992,
+        -1040
+      ],
+      "typeVersion": 1,
+      "id": "022171cb-2a8f-4bf0-83c4-0c95564e3236",
+      "name": "Sticky Note7"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "01 - Entrada Worker": {
+      "main": [
+        [
+          {
+            "node": "02 - Validar Entrada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02 - Validar Entrada": {
+      "main": [
+        [
+          {
+            "node": "03 - Entrada válida?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03 - Entrada válida?": {
+      "main": [
+        [
+          {
+            "node": "04 - Leer Sheets (batchGet)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "03-FALSE - Entrada Inválida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04 - Leer Sheets (batchGet)": {
+      "main": [
+        [
+          {
+            "node": "04b - Parsear Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04b - Parsear Sheets": {
+      "main": [
+        [
+          {
+            "node": "05 - Preparar Resultado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "05 - Preparar Resultado": {
+      "main": [
+        [
+          {
+            "node": "06 - Generar Respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "06 - Generar Respuesta",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "06 - Generar Respuesta": {
+      "main": [
+        [
+          {
+            "node": "07 - Judge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "07 - Judge",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "07 - Judge": {
+      "main": [
+        [
+          {
+            "node": "08 - Action Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "08 - Action Gate": {
+      "main": [
+        [
+          {
+            "node": "09 - Preparar Respuesta Final",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "08-FALSE - Bloqueo de Seguridad",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "09 - Preparar Respuesta Final": {
+      "main": [
+        [
+          {
+            "node": "10 - Preparar Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "07 - Judge",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NVIDIA Nemotron Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "06 - Generar Respuesta",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "NVIDIA Nemotron Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "07 - Judge",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "300aaf6b-5b18-482c-8ffe-5fb572017a25",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "a96acdcb33ae9960d28b918b81602821e5ec309333d594282858d211d95d9e73"
+  },
+  "nodeGroups": [],
+  "id": "7PgR4TBA0eDsQjTJ",
+  "tags": []
+}

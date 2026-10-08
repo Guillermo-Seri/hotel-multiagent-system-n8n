@@ -1,0 +1,859 @@
+{
+  "name": "WF_WORKER_RESERVA",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "traceId"
+            },
+            {
+              "name": "channel"
+            },
+            {
+              "name": "sender"
+            },
+            {
+              "name": "message"
+            },
+            {
+              "name": "intent"
+            },
+            {
+              "name": "fecha_inicio"
+            },
+            {
+              "name": "fecha_fin"
+            },
+            {
+              "name": "tipo"
+            },
+            {
+              "name": "categoria"
+            },
+            {
+              "name": "ocupacion"
+            },
+            {
+              "name": "pasajero"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -432,
+        64
+      ],
+      "id": "c0f59556-0a76-45ae-b7a2-848ba8541cfa",
+      "name": "01 - Entrada Worker"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const input = $json;\n\nconst traceId = String(input.traceId ?? '').trim();\nconst channel = String(input.channel ?? '').trim();\nconst sender = String(input.sender ?? '').trim();\nconst message = String(input.message ?? '').trim();\nconst intent = String(input.intent ?? '').trim().toUpperCase();\n\nconst fechaInicio = String(input.fecha_inicio ?? '').trim() || null;\nconst fechaFin = String(input.fecha_fin ?? '').trim() || null;\nconst tipoFecha = String(input.tipo ?? (fechaInicio ? 'una_noche' : 'sin_fechas')).trim();\nconst categoria = input.categoria ? String(input.categoria).trim().toUpperCase() : null;\nconst ocupacion = Number(input.ocupacion ?? 1) || 1;\nconst pasajero = String(input.pasajero ?? '').trim() || null;\n\nconst payload = {\n  fechas: {\n    tipo: tipoFecha,\n    fecha_inicio: fechaInicio,\n    fecha_fin: fechaFin,\n    categoria,\n    ocupacion,\n    pasajero\n  }\n};\n\nlet valid = true;\nconst errors = [];\n\nif (!traceId) { valid = false; errors.push('Falta traceId'); }\nif (!channel) { valid = false; errors.push('Falta channel'); }\nif (!sender) { valid = false; errors.push('Falta sender'); }\nif (!message) { valid = false; errors.push('Falta message'); }\n\nif (intent !== 'RESERVA') {\n  valid = false;\n  errors.push('Intent invalido para Worker Reserva');\n}\n\nreturn {\n  json: {\n    traceId,\n    timestamp: new Date().toISOString(),\n\n    channel,\n    sender,\n    message,\n    intent,\n\n    payload,\n\n    validation: {\n      valid,\n      errors\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -208,
+        64
+      ],
+      "id": "bf4edec8-ca89-4acb-927b-bac11e95a952",
+      "name": "02 - Validar Entrada"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "a1b3149d-fc32-4647-8f37-fe3b509aad30",
+              "leftValue": "={{ $json.validation.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        16,
+        64
+      ],
+      "id": "a505b7db-d31c-43f8-9cb4-d4aecf845590",
+      "name": "03 - Entrada válida?"
+    },
+    {
+      "parameters": {
+        "url": "https://sheets.googleapis.com/v4/spreadsheets/10gFlJkQOUzgQT1MpeErOF5qiUDqt4XuBKH0ROI4loFo/values:batchGet",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "ranges",
+              "value": "DISPONIBILIDAD!A:Z"
+            },
+            {
+              "name": "ranges",
+              "value": "TARIFAS!A:Z"
+            },
+            {
+              "name": "ranges",
+              "value": "RESERVAS!A:Z"
+            },
+            {
+              "name": "fields",
+              "value": "valueRanges(range,values)"
+            }
+          ]
+        },
+        "options": {
+          "queryParameterArrays": "repeat"
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        448,
+        48
+      ],
+      "id": "d9e16225-43dc-4e84-a4d6-aa52b7038138",
+      "name": "04 - Leer Sheets (batchGet)",
+      "retryOnFail": true,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "hHMoqJelX7PETUy1",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 04b - Parsear Sheets (Reserva)\n// Convierte la respuesta de batchGet (arrays) a objetos, para 3 hojas\n\nconst response = $json;\nconst ranges = response.valueRanges ?? [];\n\nconst rowsToObjects = (values) => {\n  if (!values || values.length < 2) return [];\n  const headers = values[0].map(h => String(h).trim().toLowerCase());\n  return values.slice(1).map(row => {\n    const obj = {};\n    headers.forEach((h, i) => {\n      obj[h] = row[i] ?? null;\n    });\n    return obj;\n  });\n};\n\nconst dispRange = ranges.find(r =>\n  String(r.range ?? '').toUpperCase().startsWith('DISPONIBILIDAD')\n);\nconst tarRange = ranges.find(r =>\n  String(r.range ?? '').toUpperCase().startsWith('TARIFAS')\n);\nconst resRange = ranges.find(r =>\n  String(r.range ?? '').toUpperCase().startsWith('RESERVAS')\n);\n\nconst disponibilidad = rowsToObjects(dispRange?.values ?? []);\nconst tarifas = rowsToObjects(tarRange?.values ?? []);\nconst reservas = rowsToObjects(resRange?.values ?? []);\n\nreturn {\n  json: {\n    disponibilidad,\n    tarifas,\n    reservas,\n    _meta: {\n      disponibilidadRows: disponibilidad.length,\n      tarifasRows: tarifas.length,\n      reservasRows: reservas.length\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        48
+      ],
+      "id": "a34942f6-e356-42e9-afd5-0e1bbda2d05e",
+      "name": "04b - Parsear Sheets"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const input = $json;\n\nreturn {\n  json: {\n    status: 'RECHAZADO',\n    approved: false,\n    response: null,\n\n    error: {\n      code: 'INVALID_WORKER_INPUT',\n      message: 'La entrada recibida por el Worker de Reserva no cumple con los campos requeridos.',\n      details: input.validation?.errors ?? []\n    },\n\n    traceId: input.traceId ?? null,\n    timestamp: new Date().toISOString(),\n\n    worker: {\n      workflow: 'WF_WORKER_RESERVA',\n      stage: 'VALIDACION_ENTRADA'\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        128,
+        320
+      ],
+      "id": "54f42d63-9251-47d0-bd4f-3e619483c036",
+      "name": "03-FALSE - Entrada Inválida"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 05 - Asignar y Preparar Reserva\n\nconst sheets = $('04b - Parsear Sheets').first().json;\nconst ctx = $('02 - Validar Entrada').first().json;\n\nconst disponibilidad = sheets.disponibilidad || [];\nconst tarifasRows = sheets.tarifas || [];\nconst reservas = sheets.reservas || [];\n\n// ---------- Utilidades ----------\nconst toISO = (v) => {\n  if (v === null || v === undefined || v === '') return null;\n  const s = String(v).trim();\n  let m = s.match(/^(\\d{4})-(\\d{2})-(\\d{2})/);\n  if (m) return m[1] + '-' + m[2] + '-' + m[3];\n  m = s.match(/^(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})$/);\n  if (m) return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');\n  return null;\n};\n\nconst addDays = (iso, n) => {\n  const d = new Date(iso + 'T00:00:00Z');\n  d.setUTCDate(d.getUTCDate() + n);\n  return d.toISOString().slice(0, 10);\n};\n\nconst categoriaDeHabitacion = (id) => {\n  const prefijo = String(id).split('-')[0].toUpperCase();\n  const mapa = { STD: 'STANDARD', SUP: 'SUPERIOR', PRE: 'PREMIUM' };\n  return mapa[prefijo] || null;\n};\n\n// ---------- Datos del payload ----------\nconst fechas = (ctx.payload && ctx.payload.fechas) ? ctx.payload.fechas : {};\nconst fechaInicio = toISO(fechas.fecha_inicio);\nconst fechaFin = toISO(fechas.fecha_fin);\nconst categoriaSolicitada = fechas.categoria || null;\nconst ocupacion = Number(fechas.ocupacion || 1) || 1;\nconst tipoFecha = fechas.tipo || 'sin_fechas';\nconst pasajero = fechas.pasajero || '';\n\nconst hoy = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10);\n\n// ---------- IDEMPOTENCIA ----------\nconst reservaExistente = reservas.find(r =>\n  String(r.trace_id || '').trim() === String(ctx.traceId).trim()\n);\n\nif (reservaExistente) {\n  return [{\n    json: {\n      traceId: ctx.traceId,\n      timestamp: ctx.timestamp,\n      channel: ctx.channel,\n      sender: ctx.sender,\n      message: ctx.message,\n      intent: ctx.intent,\n      payload: {\n        fechas: {\n          tipo: tipoFecha,\n          fecha_inicio: fechaInicio,\n          fecha_fin: fechaFin,\n          categoria: categoriaSolicitada,\n          ocupacion: ocupacion,\n          pasajero: pasajero\n        }\n      },\n      result: {\n        faltanFechas: false,\n        fechaPasada: false,\n        fechaInicio: fechaInicio,\n        fechaFin: fechaFin,\n        cantidadNoches: 0,\n        ocupacion: ocupacion,\n        categoriaSolicitada: categoriaSolicitada,\n        fechasSinDatos: [],\n        habitacionesDisponibles: [],\n        habitacionesBloqueadas: [],\n        habitacionesAsignables: [],\n        categoriasAlternativas: [],\n        asignacion: {\n          habitacion_id: reservaExistente.habitacion_id || null,\n          categoria: categoriaDeHabitacion(reservaExistente.habitacion_id),\n          reserva_id: reservaExistente.reserva_id || null,\n          estado: reservaExistente.estado || null\n        },\n        motivoSinAsignacion: 'RESERVA_DUPLICADA',\n        reservaPendiente: null,\n        reservaExistente: {\n          reserva_id: reservaExistente.reserva_id || null,\n          habitacion_id: reservaExistente.habitacion_id || null,\n          fecha_entrada: reservaExistente.fecha_entrada || null,\n          fecha_salida: reservaExistente.fecha_salida || null,\n          estado: reservaExistente.estado || null\n        }\n      }\n    }\n  }];\n}\n\n// ---------- EARLY RETURN: sin fecha ----------\nif (!fechaInicio) {\n  return [{\n    json: {\n      traceId: ctx.traceId,\n      timestamp: ctx.timestamp,\n      channel: ctx.channel,\n      sender: ctx.sender,\n      message: ctx.message,\n      intent: ctx.intent,\n      payload: {\n        fechas: {\n          tipo: tipoFecha,\n          fecha_inicio: null,\n          fecha_fin: null,\n          categoria: categoriaSolicitada,\n          ocupacion: ocupacion,\n          pasajero: pasajero\n        }\n      },\n      result: {\n        faltanFechas: true,\n        fechaPasada: false,\n        fechaInicio: null,\n        fechaFin: null,\n        cantidadNoches: 0,\n        ocupacion: ocupacion,\n        categoriaSolicitada: categoriaSolicitada,\n        fechasSinDatos: [],\n        habitacionesDisponibles: [],\n        habitacionesBloqueadas: [],\n        habitacionesAsignables: [],\n        categoriasAlternativas: [],\n        asignacion: null,\n        motivoSinAsignacion: 'FALTA_FECHA',\n        reservaPendiente: null\n      }\n    }\n  }];\n}\n\n// ---------- Calcular noches ----------\nconst noches = [];\nif (!fechaFin || fechaFin <= fechaInicio) {\n  noches.push(fechaInicio);\n} else {\n  let d = fechaInicio;\n  while (d < fechaFin && noches.length < 90) {\n    noches.push(d);\n    d = addDays(d, 1);\n  }\n}\n\n// ---------- Índice de disponibilidad ----------\nconst estadoPorNoche = {};\nconst habitaciones = new Set();\nfor (const r of disponibilidad) {\n  const f = toISO(r.fecha);\n  const id = String(r.habitacion_id || '').trim();\n  if (!f || !id) continue;\n  habitaciones.add(id);\n  if (!estadoPorNoche[f]) estadoPorNoche[f] = {};\n  estadoPorNoche[f][id] = String(r.estado || '').trim().toUpperCase();\n}\n\nconst fechasSinDatos = noches.filter(n => !estadoPorNoche[n]);\nconst habitacionesDisponibles = Array.from(habitaciones).filter(id => {\n  if (noches.length === 0) return false;\n  return noches.every(n => estadoPorNoche[n] && estadoPorNoche[n][id] === 'DISPONIBLE');\n});\n\n// ---------- Anti doble-booking ----------\nconst estadosActivos = ['RESERVADO_PENDIENTE_PAGO', 'RESERVADO_CONFIRMADO'];\nconst habitacionesBloqueadas = new Set();\nfor (const r of reservas) {\n  const estado = String(r.estado || '').trim().toUpperCase();\n  if (estadosActivos.indexOf(estado) === -1) continue;\n  const habId = String(r.habitacion_id || '').trim();\n  const rIni = toISO(r.fecha_entrada);\n  const rFin = toISO(r.fecha_salida);\n  if (!habId || !rIni || !rFin) continue;\n  for (const n of noches) {\n    if (n >= rIni && n < rFin) {\n      habitacionesBloqueadas.add(habId);\n      break;\n    }\n  }\n}\n\nconst habitacionesAsignables = habitacionesDisponibles.filter(\n  id => !habitacionesBloqueadas.has(id)\n);\n\n// ---------- Tarifas ----------\nconst tarifasPorCategoria = {};\nfor (const t of tarifasRows) {\n  const cat = String(t.categoria || '').trim().toUpperCase();\n  if (!cat) continue;\n  tarifasPorCategoria[cat] = {\n    precioBase: Number(t.precio_base),\n    precioExtra: Number(t.precio_extra_persona),\n    capacidadMax: Number(t.capacidad_max)\n  };\n}\n\n// ---------- Agrupar por categoría ----------\nconst porCategoria = {};\nfor (const id of habitacionesAsignables) {\n  const cat = categoriaDeHabitacion(id);\n  if (!cat) continue;\n  if (!porCategoria[cat]) porCategoria[cat] = [];\n  porCategoria[cat].push(id);\n}\n\n// ---------- Asignación ----------\nconst prioridad = ['STANDARD', 'SUPERIOR', 'PREMIUM'];\nconst candidatas = categoriaSolicitada ? [categoriaSolicitada] : prioridad;\n\nlet asignacion = null;\nlet motivoSinAsignacion = null;\n\nfor (const cat of candidatas) {\n  const t = tarifasPorCategoria[cat];\n  if (!t) continue;\n\n  if (ocupacion > t.capacidadMax) {\n    if (categoriaSolicitada) {\n      motivoSinAsignacion = 'La categoría ' + cat + ' no admite ' + ocupacion + ' personas (máximo ' + t.capacidadMax + ').';\n    }\n    continue;\n  }\n\n  const lista = porCategoria[cat] || [];\n  if (lista.length > 0) {\n    const precioNoche = t.precioBase + Math.max(0, ocupacion - 1) * t.precioExtra;\n    asignacion = {\n      habitacion_id: lista[0],\n      categoria: cat,\n      capacidad_max: t.capacidadMax,\n      precio_noche: precioNoche,\n      precio_total: precioNoche * Math.max(1, noches.length),\n      cantidad_noches: noches.length\n    };\n    break;\n  }\n}\n\n// ---------- Motivo de no asignación ----------\nif (!asignacion && !motivoSinAsignacion) {\n  if (fechaInicio < hoy) {\n    motivoSinAsignacion = 'FECHA_PASADA';\n  } else if (fechasSinDatos.length > 0) {\n    motivoSinAsignacion = 'FUERA_DE_VENTANA';\n  } else if (habitacionesDisponibles.length === 0) {\n    motivoSinAsignacion = 'SIN_DISPONIBILIDAD';\n  } else if (habitacionesAsignables.length === 0) {\n    motivoSinAsignacion = 'SIN_DISPONIBILIDAD_ACTIVA';\n  } else if (categoriaSolicitada && !porCategoria[categoriaSolicitada]) {\n    motivoSinAsignacion = 'CATEGORIA_NO_DISPONIBLE';\n  } else {\n    motivoSinAsignacion = 'SIN_DISPONIBILIDAD';\n  }\n}\n\n// ---------- Categorías alternativas ----------\nconst categoriasAlternativas = Object.keys(porCategoria).map(cat => {\n  const t = tarifasPorCategoria[cat];\n  const precioNoche = t ? t.precioBase + Math.max(0, ocupacion - 1) * t.precioExtra : null;\n  return {\n    categoria: cat,\n    cantidad: porCategoria[cat].length,\n    capacidad_max: t ? t.capacidadMax : null,\n    precio_noche: precioNoche,\n    apta: t ? ocupacion <= t.capacidadMax : false\n  };\n});\n\n// ---------- Objeto reservaPendiente ----------\nlet reservaPendiente = null;\nif (asignacion) {\n  reservaPendiente = {\n    reserva_id: 'RES-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),\n    trace_id: ctx.traceId,\n    habitacion_id: asignacion.habitacion_id,\n    fecha_entrada: fechaInicio,\n    fecha_salida: fechaFin || fechaInicio,\n    estado: 'RESERVADO_PENDIENTE_PAGO',\n    pasajero: pasajero,\n    contacto: ctx.sender\n  };\n}\n\n// ---------- Output ----------\nreturn [{\n  json: {\n    traceId: ctx.traceId,\n    timestamp: ctx.timestamp,\n    channel: ctx.channel,\n    sender: ctx.sender,\n    message: ctx.message,\n    intent: ctx.intent,\n\n    payload: {\n      fechas: {\n        tipo: tipoFecha,\n        fecha_inicio: fechaInicio,\n        fecha_fin: fechaFin,\n        categoria: categoriaSolicitada,\n        ocupacion: ocupacion,\n        pasajero: pasajero\n      }\n    },\n\n    result: {\n      faltanFechas: false,\n      fechaPasada: fechaInicio < hoy,\n      fechaInicio: fechaInicio,\n      fechaFin: fechaFin,\n      cantidadNoches: noches.length,\n      ocupacion: ocupacion,\n      categoriaSolicitada: categoriaSolicitada,\n\n      fechasSinDatos: fechasSinDatos,\n      habitacionesDisponibles: habitacionesDisponibles,\n      habitacionesBloqueadas: Array.from(habitacionesBloqueadas),\n      habitacionesAsignables: habitacionesAsignables,\n\n      categoriasAlternativas: categoriasAlternativas,\n\n      asignacion: asignacion,\n      motivoSinAsignacion: motivoSinAsignacion,\n      reservaPendiente: reservaPendiente\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        48
+      ],
+      "id": "6b5b56e6-97a5-4e0e-8689-9bdeb0e506a2",
+      "name": "05 - Asignar y Preparar Reserva"
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-oss-120b",
+        "options": {
+          "maxTokensToSample": 700,
+          "temperature": "={{ 0.2 }}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        1216,
+        272
+      ],
+      "id": "6b740f03-fe2d-4589-a4ff-93001067869d",
+      "name": "Groq Chat Model",
+      "credentials": {
+        "groqApi": {
+          "id": "Mjz9M0wP6JPLiyNU",
+          "name": "Groq account 4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"faithfulness\": {\n      \"type\": \"number\",\n      \"minimum\": 1,\n      \"maximum\": 5\n    },\n    \"reservation_safety\": {\n      \"type\": \"boolean\"\n    },\n    \"policy_compliance\": {\n      \"type\": \"boolean\"\n    },\n    \"tone_and_clarity\": {\n      \"type\": \"number\",\n      \"minimum\": 1,\n      \"maximum\": 5\n    },\n    \"approved\": {\n      \"type\": \"boolean\"\n    },\n    \"reason\": {\n      \"type\": \"string\"\n    }\n  },\n  \"required\": [\n    \"faithfulness\",\n    \"reservation_safety\",\n    \"policy_compliance\",\n    \"tone_and_clarity\",\n    \"approved\",\n    \"reason\"\n  ]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1808,
+        272
+      ],
+      "id": "cdd0ed48-424a-4d13-a9de-b8daec950233",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "727418bf-6808-46a5-a3a3-0b07f264f2a8",
+              "leftValue": "={{ $json.output.approved }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2016,
+        48
+      ],
+      "id": "57c7f1aa-2015-4268-9577-298881b2de72",
+      "name": "08 - Action Gate"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "==Mensaje del huésped:\n{{ $json.message }}\n\nDatos de la reserva:\n{{ JSON.stringify({\n  asignacion: $json.result.asignacion,\n  reservaPendiente: $json.result.reservaPendiente,\n  motivoSinAsignacion: $json.result.motivoSinAsignacion,\n  categoriasAlternativas: $json.result.categoriasAlternativas,\n  fechaInicio: $json.result.fechaInicio,\n  fechaFin: $json.result.fechaFin,\n  cantidadNoches: $json.result.cantidadNoches,\n  ocupacion: $json.result.ocupacion\n}) }}\n\nGenerá una respuesta breve para el huésped utilizando únicamente estos datos.",
+        "needsFallback": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "Eres el generador de respuestas del sistema de reservas de un hotel.\n\nTu tarea es redactar una respuesta para el huésped sobre su solicitud de reserva.\n\nREGLAS:\n\n1. NO confirmes la reserva como definitiva. El estado es \"pendiente de pago\".\n2. Usá EXCLUSIVAMENTE los datos de reservaPendiente, asignacion, motivoSinAsignacion y categoriasAlternativas.\n3. Si asignacion existe, mencioná: código de habitación, fechas, precio por noche y total. Aclarás que queda pendiente de pago.\n4. Si motivoSinAsignacion NO es null, seguí la regla específica de cada caso (ver abajo).\n5. NUNCA prometas disponibilidad no verificada.\n6. NUNCA digas que la reserva está confirmada. Decí \"queda pendiente de pago\" o \"pendiente de confirmación de recepción\".\n7. NUNCA ofrezcas procesar el pago vos mismo.\n8. Tono cordial, claro, breve. Apto para WhatsApp.\n9. Responde en español.\n10. Al mencionar fechas, usá \"5 de octubre\" o \"5 de octubre de 2026\". NO uses \"05/10\".\n11. Al mencionar montos, usá formato con separador de miles y $: \"$21.000\". NO escribas \"21000\".\n\nREGLA POR motivoSinAsignacion:\n\n- Si motivoSinAsignacion = \"FALTA_FECHA\" o result.faltanFechas = true:\n  pedí amablemente la fecha de entrada. NO pidas el nombre. NO menciones precios.\n\n- Si motivoSinAsignacion = \"FECHA_PASADA\" o result.fechaPasada = true:\n  indicá que la fecha consultada ya pasó y pedí una fecha futura.\n  NO pidas el nombre. NO menciones precios.\n\n- Si motivoSinAsignacion = \"FUERA_DE_VENTANA\":\n  indicá que por el momento no tenés cargada la disponibilidad para esas\n  fechas y que recepción la confirmará. NO pidas el nombre.\n\n- Si motivoSinAsignacion = \"SIN_DISPONIBILIDAD\" o \"SIN_DISPONIBILIDAD_ACTIVA\":\n  indicá que no hay disponibilidad para esas fechas. NO pidas el nombre.\n\n- Si motivoSinAsignacion = \"RESERVA_DUPLICADA\":\n  indicá que ya existe una reserva registrada con este mismo mensaje.\n  Mencioná el reserva_id y el estado. NO generes una nueva reserva.\n  Ejemplo: \"Tu reserva ya fue registrada con código RES-xxx y está\n  pendiente de pago. ¿Querés que te ayude con algo más?\"\n Ejemplo - reserva duplicada:\n\"Tu reserva ya había sido registrada con el código RES-1791063781306-94i3t8\npara la habitación STD-01. Está pendiente de pago. ¿Necesitás algo más?\"\n\n- Si motivoSinAsignacion empieza con \"La categoría\" (capacidad excedida):\n  indicá el motivo y ofrecé alternativas de categoriasAlternativas con\n  apta = true. NO pidas el nombre.\n\n- Si motivoSinAsignacion = \"CATEGORIA_NO_DISPONIBLE\":\n  indicá que esa categoría no tiene disponibilidad y sugerí alternativas\n  con apta = true.\n\n- Si asignacion existe y reservaPendiente.pasajero está vacío:\n  pedí el nombre completo para completar la reserva.\n\n- Si asignacion existe y reservaPendiente.pasajero NO está vacío:\n  confirmá la reserva como pendiente de pago sin pedir el nombre.\n\nEJEMPLOS:\n\n- Sin fecha:\n\"Con gusto te ayudo con la reserva. ¿Para qué fecha la necesitás?\"\n\n- Fecha pasada:\n\"La fecha que consultaste ya pasó. ¿Podés indicarme una fecha futura?\"\n\n- Fuera de ventana:\n\"Por el momento no tengo cargada la disponibilidad para esas fechas. Recepción puede confirmarla a la brevedad.\"\n\n- Sin disponibilidad:\n\"Lamentablemente no hay disponibilidad para esas fechas. Recepción puede ayudarte a encontrar alternativas.\"\n\n- Categoría no apta:\n\"La categoría Standard no admite 3 personas. Para esa cantidad puedo ofrecerte Superior ($42.000 por noche) o Premium ($59.000 por noche), ambas con disponibilidad. ¿Cuál preferís?\"\n\n- Reserva preparada, falta nombre:\n\"Te reservo una Premium (código PRE-01) del 5 al 7 de octubre. Tarifa: $52.000 por noche, total $104.000. La reserva queda pendiente de pago. ¿Me confirmás tu nombre completo para completarla?\"\n\nNo agregues texto fuera de la respuesta al huésped."
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        1200,
+        48
+      ],
+      "id": "1ced6b8c-3110-41ed-816e-3161f04d3079",
+      "name": "06 - Generar Respuesta",
+      "retryOnFail": true,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "==RESPUESTA GENERADA:\n{{ $json.text }}\n\nDATOS DE LA RESERVA:\n{{ JSON.stringify($('05 - Asignar y Preparar Reserva').first().json.result) }}\n\nMENSAJE ORIGINAL DEL HUÉSPED:\n{{ $('05 - Asignar y Preparar Reserva').first().json.message }}\n\nEvalúa la respuesta utilizando exclusivamente los datos anteriores.\nDevuelve únicamente el JSON solicitado.",
+        "hasOutputParser": true,
+        "needsFallback": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "Eres el evaluador de seguridad y calidad del sistema de reservas de un hotel.\n\nDebes evaluar EXCLUSIVAMENTE la respuesta generada y los datos de la reserva.\n\nCRITERIOS:\n\n1. faithfulness (1-5):\nEvalúa si la respuesta usa solo información respaldada por los datos.\n1 = inventa o contradice datos.\n3 = alguna afirmación dudosa.\n5 = todo respaldado por los datos.\n\n2. reservation_safety (true/false):\n- true SOLO si la respuesta NO confirma la reserva como definitiva.\n- false si la respuesta dice \"reserva confirmada\", \"reserva hecha\", \"está lista\",\n  o cualquier frase que implique que la reserva ya está cerrada.\n- La respuesta debe decir \"pendiente de pago\" o \"pendiente de confirmación\".\n\n3. policy_compliance (true/false):\n- true SOLO si:\n  * menciona el código de habitación solo si result.asignacion existe;\n  * menciona precios que coincidan con asignacion.precio_noche o categoriasAlternativas.precio_noche;\n  * no ofrece categorías con apta = false;\n  * no promete procesar pagos;\n  * no ejecuta acciones externas;\n  * pide el nombre SOLO si asignacion existe y reservaPendiente.pasajero está vacío.\n- false en caso contrario.\n\n4. tone_and_clarity (1-5):\n1 = confusa o inapropiada.\n3 = aceptable pero mejorable.\n5 = clara, cordial y adecuada para WhatsApp.\n\nREGLA DE APROBACIÓN:\n\napproved = true SOLO SI:\n\nfaithfulness >= 4\nAND\nreservation_safety = true\nAND\npolicy_compliance = true\nAND\ntone_and_clarity >= 4\n\nSi alguna condición no se cumple, approved debe ser false.\n\nEXCEPCIÓN PARA CASOS SIN ASIGNACIÓN:\n\nSi result.asignacion es null Y result.motivoSinAsignacion NO es null\n(puede ser FALTA_FECHA, FECHA_PASADA, FUERA_DE_VENTANA,\nSIN_DISPONIBILIDAD, SIN_DISPONIBILIDAD_ACTIVA, CATEGORIA_NO_DISPONIBLE,\no empezar con \"La categoría\"), entonces:\n\n- reservation_safety debe ser true (no hay reserva que confirmar).\n- policy_compliance debe ser true si la respuesta explica el motivo\n  y NO pide el nombre.\n- faithfulness debe ser >= 4 si el motivo coincide con los datos.\n- approved puede ser true aunque no exista asignación.\n\nIMPORTANTE: si motivoSinAsignacion indica falta de fecha, fecha pasada,\nfuera de ventana o sin disponibilidad, la respuesta NO debe pedir el\nnombre del huésped. Si lo pide, policy_compliance debe ser false.\n\nCASO RESERVA DUPLICADA:\nSi result.motivoSinAsignacion = \"RESERVA_DUPLICADA\":\n- faithfulness = 5 si la respuesta menciona el reserva_id existente.\n- reservation_safety = true (no hay nueva reserva que confirmar).\n- policy_compliance = true si menciona el estado del reservaExistente.\n- approved = true.\n\nIMPORTANTE: si la respuesta intenta crear una NUEVA reserva cuando hay\nduplicado, policy_compliance debe ser false.\n\nIDIOMA:\n\nEl campo \"reason\" debe estar redactado en español.\n\nFORMATO DE SALIDA:\n\nDevuelve ÚNICAMENTE un JSON válido con esta estructura:\n\n{\n  \"faithfulness\": 1,\n  \"reservation_safety\": true,\n  \"policy_compliance\": true,\n  \"tone_and_clarity\": 1,\n  \"approved\": true,\n  \"reason\": \"...\"\n}\n\nNo agregues texto fuera del JSON.\nNo uses backticks ni bloques de código markdown."
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        1616,
+        48
+      ],
+      "id": "2089a037-6be7-477b-8628-d65aa7038075",
+      "name": "07 - Judge",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-oss-120b",
+        "options": {
+          "maxTokensToSample": 2000,
+          "temperature": "={{ 0.2 }}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        1552,
+        272
+      ],
+      "id": "5faef547-e900-4510-80b6-25dd1f2109f1",
+      "name": "Groq Chat Model1",
+      "credentials": {
+        "groqApi": {
+          "id": "Mjz9M0wP6JPLiyNU",
+          "name": "Groq account 4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const judge = $('07 - Judge').first().json.output;\n\nlet traceId = null;\ntry {\n  traceId = $('05 - Asignar y Preparar Reserva').first().json.traceId;\n} catch (e) {\n  try {\n    traceId = $('02 - Validar Entrada').first().json.traceId;\n  } catch (e2) {\n    traceId = null;\n  }\n}\n\nreturn {\n  json: {\n    status: 'BLOQUEADO',\n    approved: false,\n    response: null,\n\n    traceId: traceId,\n    timestamp: new Date().toISOString(),\n\n    judge: judge,\n\n    escalation: {\n      required: true,\n      reason: judge && judge.reason ? judge.reason : 'La reserva no superó las validaciones de seguridad.'\n    },\n\n    worker: {\n      workflow: 'WF_WORKER_RESERVA',\n      stage: 'ACTION_GATE'\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2224,
+        320
+      ],
+      "id": "45a91286-a2b6-4029-a715-0024a499016d",
+      "name": "08-FALSE - Bloqueo de Seguridad"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/10gFlJkQOUzgQT1MpeErOF5qiUDqt4XuBKH0ROI4loFo/edit?usp=sharing",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "RESERVAS",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "reserva_id": "={{ $('05 - Asignar y Preparar Reserva').item.json.result.reservaPendiente.reserva_id }}",
+            "trace_id": "={{ $('05 - Asignar y Preparar Reserva').item.json.result.reservaPendiente.trace_id }}",
+            "habitacion_id": "={{ $('05 - Asignar y Preparar Reserva').item.json.result.reservaPendiente.habitacion_id }}",
+            "fecha_entrada": "={{ $('05 - Asignar y Preparar Reserva').item.json.result.reservaPendiente.fecha_entrada }}",
+            "fecha_salida": "={{ $('05 - Asignar y Preparar Reserva').item.json.result.reservaPendiente.fecha_salida }}",
+            "estado": "={{ $('05 - Asignar y Preparar Reserva').item.json.result.reservaPendiente.estado }}",
+            "pasajero": "={{ $('05 - Asignar y Preparar Reserva').item.json.result.reservaPendiente.pasajero }}",
+            "contacto": "={{ $('05 - Asignar y Preparar Reserva').item.json.result.reservaPendiente.contacto }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "reserva_id",
+              "displayName": "reserva_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "trace_id",
+              "displayName": "trace_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "habitacion_id",
+              "displayName": "habitacion_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "fecha_entrada",
+              "displayName": "fecha_entrada",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "fecha_salida",
+              "displayName": "fecha_salida",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "estado",
+              "displayName": "estado",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "pasajero",
+              "displayName": "pasajero",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "contacto",
+              "displayName": "contacto",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2224,
+        0
+      ],
+      "id": "47c8dbfa-14ea-4f3b-98f7-4dd3d04ac839",
+      "name": "09 - Registrar Reserva",
+      "retryOnFail": true,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "hHMoqJelX7PETUy1",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const input = $json;\n\nreturn {\n  json: {\n    traceId: input.traceId ?? null,\n    timestamp: new Date().toISOString(),\n\n    channel: input.channel,\n    recipient: input.sender,\n\n    originalMessage: input.message,\n    message: input.response,\n\n    approved: input.approved,\n\n    reservaRegistrada: input.reservaRegistrada ?? null,\n\n    judge: input.judge ?? null,\n\n    worker: {\n      workflow: 'WF_WORKER_RESERVA',\n      stage: 'DISPATCH'\n    },\n\n    dispatch: {\n      ready: true,\n      source: 'WF_WORKER_RESERVA'\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2672,
+        0
+      ],
+      "id": "867029a0-7794-480a-9a67-3033d144e60a",
+      "name": "11 - Preparar Dispatch"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const contexto = $('05 - Asignar y Preparar Reserva').first().json;\nconst respuesta = $('06 - Generar Respuesta').first().json;\nconst judge = $('07 - Judge').first().json.output;\nconst reserva = $('09 - Registrar Reserva').first().json;\n\nconst texto = String(respuesta.text ?? '').trim();\nconst responseFinal = texto.length > 0\n  ? texto\n  : 'No pudimos procesar tu reserva en este momento. Por favor, contactá a recepción.';\n\nreturn {\n  json: {\n    traceId: contexto.traceId,\n    timestamp: new Date().toISOString(),\n\n    channel: contexto.channel,\n    sender: contexto.sender,\n    message: contexto.message,\n    intent: contexto.intent,\n\n    approved: judge.approved,\n\n    response: responseFinal,\n\n    reservaRegistrada: {\n      reserva_id: reserva.reserva_id ?? null,\n      habitacion_id: reserva.habitacion_id ?? null,\n      estado: reserva.estado ?? null\n    },\n\n    judge: judge\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2448,
+        0
+      ],
+      "id": "d915ee9d-6d68-417b-9589-6bdedc1e7573",
+      "name": "10 - Preparar Respuesta Final"
+    },
+    {
+      "parameters": {
+        "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "options": {
+          "temperature": "={{ 0.2 }}",
+          "maxRetries": 5
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatNvidia",
+      "typeVersion": 1,
+      "position": [
+        1344,
+        272
+      ],
+      "id": "c6ffbb9d-abc5-40ab-9534-e6def3a2aeca",
+      "name": "NVIDIA Nemotron Chat Model",
+      "credentials": {
+        "nvidiaApi": {
+          "id": "j2gW89oiikvVfhgA",
+          "name": "NVIDIA Nemotron account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "nvidia/nemotron-3-super-120b-a12b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatNvidia",
+      "typeVersion": 1,
+      "position": [
+        1680,
+        272
+      ],
+      "id": "dc7f9bab-e442-4037-9210-635b72251b99",
+      "name": "NVIDIA Nemotron Chat Model1",
+      "credentials": {
+        "nvidiaApi": {
+          "id": "j2gW89oiikvVfhgA",
+          "name": "NVIDIA Nemotron account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "# WF_WORKER_RESERVA\n\nGestiona reservas con control anti doble-booking e\nidempotencia. Único Worker con permiso de escritura en Sheets.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🔀 FLUJO\nEntrada → Validar → Leer Sheets (DISPONIBILIDAD + TARIFAS\n+ RESERVAS) → Parsear → Asignar y Preparar → Generar\nRespuesta → Judge → Action Gate\n  ├─ true  → Registrar Reserva (Sheets append) → Respuesta Final\n  └─ false → Bloqueo de Seguridad\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n💾 FUENTE DE DATOS\nHoja RESERVAS: reserva_id, trace_id, habitacion_id,\nfecha_entrada, fecha_salida, estado, pasajero, contacto.\nEstados válidos: RESERVADO_PENDIENTE_PAGO, RESERVADO_CONFIRMADO.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🛡️ IDEMPOTENCIA (nodo 05)\nSi el trace_id ya existe en RESERVAS → devuelve\nRESERVA_DUPLICADA con el reserva_id existente.\nNo crea fila nueva. Evita duplicados por reintentos\nde red o doble click del huésped.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🛡️ ANTI DOBLE-BOOKING (nodo 05)\nDos filtros secuenciales:\n  1. Sheets: habitaciones DISPONIBLE en todas las noches.\n  2. RESERVAS: descarta las que tienen reserva activa\n     que se solapa con las fechas consultadas.\nOutput: habitacionesDisponibles, habitacionesBloqueadas,\nhabitacionesAsignables.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n⚡ CASOS BORDE (motivoSinAsignacion)\nFALTA_FECHA / FECHA_PASADA / FUERA_DE_VENTANA /\nSIN_DISPONIBILIDAD / SIN_DISPONIBILIDAD_ACTIVA /\nCATEGORIA_NO_DISPONIBLE / RESERVA_DUPLICADA.\nEl LLM usa este campo para generar la respuesta correcta.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🛡️ ESCRITURA PROTEGIDA\nSolo el nodo 09 escribe en RESERVAS, y solo si el Judge\naprobó y el Action Gate lo permitió.\nEl LLM nunca escribe directo.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🛡️ JUDGE\nfaithfulness / reservation_safety / policy_compliance /\ntone_and_clarity.\nExcepción: si asignacion es null y motivoSinAsignacion\nexplica el motivo, aprueba igual.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n⚙️ RESILIENCIA\nFallback LLM: Groq → NVIDIA Nemotron.\nRetry On Fail en nodos críticos (Sheets, LLM, Judge).",
+        "height": 1152,
+        "width": 608,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        160,
+        -1536
+      ],
+      "typeVersion": 1,
+      "id": "f5dc4657-1ad6-4535-99dd-b50457ddd6f8",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "🔵 01. ENTRADA\n• Valida campos requeridos + intent=RESERVA.",
+        "height": 656,
+        "width": 800,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -528,
+        -144
+      ],
+      "typeVersion": 1,
+      "id": "90ae2200-d519-44d3-97d7-e04c18017f22",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "🟣 02. ASIGNACIÓN Y DOBLE-BOOKING\n• Lee DISPONIBILIDAD + TARIFAS + RESERVAS.\n• Idempotencia por trace_id.\n• Re-verificación anti doble-booking.\n• Genera reservaPendiente sin escribir.",
+        "height": 656,
+        "width": 832,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        320,
+        -144
+      ],
+      "typeVersion": 1,
+      "id": "862f4f39-de43-48df-906b-97c50c2768cd",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "🟠 03. GENERACIÓN Y GUARDRAILS\n• LLM genera respuesta según motivoSinAsignacion.\n• Judge evalúa reservation_safety y política.",
+        "height": 656,
+        "width": 944,
+        "color": "#D53A07"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1184,
+        -144
+      ],
+      "typeVersion": 1,
+      "id": "817f2ecf-b47e-4b77-a1f6-0bf21cebeb4b",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "content": "🟢 04. PERSISTENCIA PROTEGIDA\n• Único Worker que escribe en Sheets.\n• Solo escribe si Judge aprobó + Action Gate.\n• El LLM NUNCA escribe directo.",
+        "height": 272,
+        "width": 768,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2144,
+        -112
+      ],
+      "typeVersion": 1,
+      "id": "e4620f6d-96b5-4b69-9258-36b8c8330d08",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "content": "🔴 05. BLOQUEO\n• Reserva no aprobada → no se persiste.",
+        "height": 272,
+        "width": 768,
+        "color": "#C10B0B"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2144,
+        208
+      ],
+      "typeVersion": 1,
+      "id": "0f30caaf-1a1b-4860-aa14-179e94973d42",
+      "name": "Sticky Note5"
+    },
+    {
+      "parameters": {
+        "content": "## Paleta de colores por tipo de bloque\nColor\t-\tUso\n🔵 Azul\t-\tIngesta y normalización\n🟣 Violeta  -\tRazonamiento / IA\n🟠 Naranja  -\tGuardrails / Judge\n🟢 Verde  -\tPersistencia y salida\n🔴 Rojo\t -\tBloqueo / Alertas\n",
+        "height": 208,
+        "width": 432,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        832,
+        -1536
+      ],
+      "typeVersion": 1,
+      "id": "0a8aafa3-6884-4174-a7dc-b720ffed8d36",
+      "name": "Sticky Note7"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "01 - Entrada Worker": {
+      "main": [
+        [
+          {
+            "node": "02 - Validar Entrada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02 - Validar Entrada": {
+      "main": [
+        [
+          {
+            "node": "03 - Entrada válida?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03 - Entrada válida?": {
+      "main": [
+        [
+          {
+            "node": "04 - Leer Sheets (batchGet)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "03-FALSE - Entrada Inválida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04 - Leer Sheets (batchGet)": {
+      "main": [
+        [
+          {
+            "node": "04b - Parsear Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04b - Parsear Sheets": {
+      "main": [
+        [
+          {
+            "node": "05 - Asignar y Preparar Reserva",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "05 - Asignar y Preparar Reserva": {
+      "main": [
+        [
+          {
+            "node": "06 - Generar Respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "06 - Generar Respuesta",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "07 - Judge",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "08 - Action Gate": {
+      "main": [
+        [
+          {
+            "node": "09 - Registrar Reserva",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "08-FALSE - Bloqueo de Seguridad",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "06 - Generar Respuesta": {
+      "main": [
+        [
+          {
+            "node": "07 - Judge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "07 - Judge": {
+      "main": [
+        [
+          {
+            "node": "08 - Action Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "07 - Judge",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "09 - Registrar Reserva": {
+      "main": [
+        [
+          {
+            "node": "10 - Preparar Respuesta Final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "10 - Preparar Respuesta Final": {
+      "main": [
+        [
+          {
+            "node": "11 - Preparar Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NVIDIA Nemotron Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "06 - Generar Respuesta",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "NVIDIA Nemotron Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "07 - Judge",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "26d6302c-4ad6-45c7-80ef-a8f4e8cfe77e",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "a96acdcb33ae9960d28b918b81602821e5ec309333d594282858d211d95d9e73"
+  },
+  "nodeGroups": [],
+  "id": "hcstktcldLtkVAvd",
+  "tags": []
+}
