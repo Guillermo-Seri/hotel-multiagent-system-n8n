@@ -10,7 +10,7 @@ Proyecto final del curso **AI Automation Avanzado** de Coderhouse.
 
 ## Video Demo
 
-[Ver demo de 3 minutos]((https://youtu.be/HEz_ljEYmlU?si=X1pBehcKU7ZOV2HL))
+[Ver demo de 3 minutos](https://youtu.be/HEz_ljEYmlU?si=X1pBehcKU7ZOV2HL)
 
 ---
 
